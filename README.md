@@ -2,6 +2,8 @@
 
 A Godot 4-based vehicle dynamics simulator designed as a replacement for Autoware's `simple_planning_simulator`. Features realistic physics, lanelet2 map rendering, and full Autoware interface compatibility via rosbridge.
 
+![Demo](docs/image/Godot_based_planning_simulator.gif)
+
 ## Features
 
 - **Vehicle Physics**: VehicleBody3D-based simulation with configurable parameters (mass, wheelbase, suspension, tire grip, etc.)
