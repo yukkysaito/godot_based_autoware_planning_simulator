@@ -1,0 +1,455 @@
+extends VehicleBody3D
+## Configurable vehicle controller with bicycle-model lateral dynamics.
+## VehicleBody3D handles suspension/ground contact; this script adds
+## realistic cornering forces, weight transfer, and Ackermann approximation.
+
+enum Gear { PARK, REVERSE, NEUTRAL, DRIVE }
+
+# ==========================================================================
+# Parameters
+# ==========================================================================
+
+@export_group("Geometry")
+@export var wheel_base: float = 4.76
+@export var rear_overhang: float = 1.0
+@export var front_overhang: float = 1.23
+@export var tread: float = 1.72
+@export var vehicle_weight: float = 8000.0
+@export var wheel_radius_param: float = 0.373
+
+@export_group("Response Delay (transport)")
+@export var accel_response_delay: float = 0.6    ## Pure time delay [s]
+@export var brake_response_delay: float = 0.12
+@export var steering_response_delay: float = 0.45
+
+@export_group("Response Time Constant (1st order lag)")
+@export var accel_time_constant: float = 0.15    ## 1st order lag after delay [s]
+@export var brake_time_constant: float = 0.05
+@export var steering_time_constant: float = 0.1
+
+@export_group("Powertrain")
+@export var max_engine_force: float = 10000.0
+@export var max_brake_force: float = 300.0
+@export var max_steer_angle: float = 0.61
+@export var reverse_power_ratio: float = 0.3
+@export var steer_speed_threshold: float = 30.0
+@export var steer_high_speed_ratio: float = 0.15
+@export var creep_force: float = 1500.0
+@export var creep_max_speed: float = 8.0
+
+@export_group("Resistance")
+@export var rolling_resistance_coeff: float = 0.003
+@export var drag_coefficient: float = 0.65
+@export var frontal_area: float = 5.4
+@export var air_density: float = 1.225
+@export var engine_braking_force: float = 20.0
+
+@export_group("Tire Model")
+@export var front_cornering_stiffness: float = 80000.0  ## [N/rad] per axle
+@export var rear_cornering_stiffness: float = 120000.0  ## [N/rad] per axle (higher = more stable rear)
+@export var max_tire_force_ratio: float = 1.2            ## Max lateral force / normal force
+@export var cg_to_front_ratio: float = 0.45              ## CG position (0=front, 1=rear)
+
+@export_group("Suspension")
+@export var suspension_rest_length_val: float = 0.4
+@export var suspension_stiffness_val: float = 50.0
+@export var suspension_travel_val: float = 0.3
+@export var suspension_max_force_val: float = 100000.0
+@export var damping_compression_val: float = 4.0
+@export var damping_relaxation_val: float = 6.0
+@export var wheel_friction_slip: float = 20.0
+
+@export_group("Physics Material")
+@export var body_bounce: float = 0.0
+@export var body_friction: float = 0.5
+@export var center_of_mass_y: float = 0.1
+
+@export_group("Respawn")
+@export var respawn_below_y: float = -100.0
+@export var flip_respawn_time: float = 3.0
+
+# ==========================================================================
+# Runtime state
+# ==========================================================================
+
+var current_gear: Gear = Gear.PARK
+var input_enabled: bool = true
+var is_colliding: bool = false
+
+# Unified command input — set by keyboard (manual) or ros_bridge (auto)
+var cmd_throttle: float = 0.0     ## 0-1 throttle command
+var cmd_brake: float = 0.0        ## 0-1 brake command
+var cmd_steering: float = 0.0     ## -1 to +1 steering command
+
+# After transport delay
+var _current_throttle: float = 0.0
+var _current_brake_val: float = 0.0
+var _current_steering: float = 0.0
+
+# Transport delay ring buffers
+var _throttle_delay_buf: Array = []
+var _brake_delay_buf: Array = []
+var _steering_delay_buf: Array = []
+var _physics_time: float = 0.0
+var _spawn_transform: Transform3D
+var _last_good_transform: Transform3D
+var _flip_timer: float = 0.0
+var _good_pos_timer: float = 0.0
+var _contact_count: int = 0
+
+signal respawned
+signal gear_changed(gear: Gear)
+
+const GEAR_NAMES = {
+	Gear.PARK: "P", Gear.REVERSE: "R",
+	Gear.NEUTRAL: "N", Gear.DRIVE: "D",
+}
+
+# ==========================================================================
+# Lifecycle
+# ==========================================================================
+
+func _ready():
+	apply_vehicle_params()
+	contact_monitor = true
+	max_contacts_reported = 4
+	body_entered.connect(_on_body_entered)
+	body_exited.connect(_on_body_exited)
+	await get_tree().physics_frame
+	_spawn_transform = global_transform
+	_last_good_transform = global_transform
+
+func _physics_process(delta):
+	if input_enabled:
+		_read_keyboard_input()
+	# Common path: apply transport delay then set vehicle controls
+	_apply_delayed_controls(delta)
+	_apply_resistance_forces()
+	_stabilize_lateral()
+	_record_good_position(delta)
+	_check_auto_respawn(delta)
+
+# ==========================================================================
+# Vehicle parameter application
+# ==========================================================================
+
+func apply_vehicle_params():
+	mass = vehicle_weight
+	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
+	center_of_mass = Vector3(0, center_of_mass_y, 0)
+	continuous_cd = false
+	var mat = PhysicsMaterial.new()
+	mat.bounce = body_bounce
+	mat.friction = body_friction
+	physics_material_override = mat
+	_apply_wheel_params()
+	_build_body_visual()
+	_build_wheel_visuals()
+
+func _apply_wheel_params():
+	for w in _wheels():
+		w.wheel_radius = wheel_radius_param
+		w.wheel_rest_length = suspension_rest_length_val
+		w.suspension_stiffness = suspension_stiffness_val
+		w.suspension_travel = suspension_travel_val
+		w.suspension_max_force = suspension_max_force_val
+		w.damping_compression = damping_compression_val
+		w.damping_relaxation = damping_relaxation_val
+		w.wheel_friction_slip = wheel_friction_slip
+
+func _build_body_visual():
+	var total_len = front_overhang + wheel_base + rear_overhang
+	var body_w = tread + 0.36
+	var body_h = 0.9
+	var cz = (rear_overhang - front_overhang) / 2.0
+	var body_y = body_h / 2.0 + wheel_radius_param + 0.1
+
+	var col: CollisionShape3D = $CollisionShape3D
+	var box = BoxShape3D.new()
+	box.size = Vector3(body_w, body_h, total_len)
+	col.shape = box
+	col.position = Vector3(0, body_y, cz)
+
+	var body_mesh: MeshInstance3D = $BodyMesh
+	body_mesh.mesh = _make_box_mesh(body_w, body_h, total_len)
+	body_mesh.position = col.position
+	if not body_mesh.material_override:
+		body_mesh.material_override = _make_material(Color(0.15, 0.55, 0.25))
+
+	var cabin: MeshInstance3D = $CabinMesh
+	var cab_h = 1.2
+	var cab_len = wheel_base + 0.5
+	cabin.mesh = _make_box_mesh(body_w, cab_h, cab_len)
+	cabin.position = Vector3(0, body_h + cab_h / 2.0, cz)
+	if not cabin.material_override:
+		var m = _make_material(Color(0.85, 0.85, 0.85, 0.8))
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		cabin.material_override = m
+
+func _build_wheel_visuals():
+	for wheel in _wheels():
+		var mi := _find_or_create_child_mesh(wheel)
+		mi.transform = Transform3D(Basis(Vector3.FORWARD, PI / 2.0), Vector3.ZERO)
+		var cyl = CylinderMesh.new()
+		cyl.top_radius = wheel_radius_param
+		cyl.bottom_radius = wheel_radius_param
+		cyl.height = 0.25
+		mi.mesh = cyl
+
+# ==========================================================================
+# Queries
+# ==========================================================================
+
+func get_gear_name() -> String:
+	return GEAR_NAMES.get(current_gear, "?")
+
+func get_forward_speed() -> float:
+	return linear_velocity.dot(-global_transform.basis.z)
+
+func get_speed_kmh() -> float:
+	return linear_velocity.length() * 3.6
+
+func is_flipped() -> bool:
+	return global_transform.basis.y.dot(Vector3.UP) < 0.3
+
+func has_ground_contact() -> bool:
+	for w in _wheels():
+		if w.is_in_contact():
+			return true
+	return false
+
+func set_gear(g: Gear):
+	if g == current_gear:
+		return
+	if g != Gear.NEUTRAL and absf(get_forward_speed()) > 3.0:
+		return
+	current_gear = g
+	gear_changed.emit(g)
+
+# ==========================================================================
+# Manual input
+# ==========================================================================
+
+func _read_keyboard_input():
+	## Read keyboard and write to cmd_* variables.
+	if Input.is_key_pressed(KEY_1): set_gear(Gear.PARK)
+	elif Input.is_key_pressed(KEY_2): set_gear(Gear.REVERSE)
+	elif Input.is_key_pressed(KEY_3): set_gear(Gear.NEUTRAL)
+	elif Input.is_key_pressed(KEY_4): set_gear(Gear.DRIVE)
+
+	var accel_pressed = Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP)
+	var brake_pressed = Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN)
+
+	cmd_throttle = 0.0
+	cmd_brake = 0.0
+	match current_gear:
+		Gear.DRIVE:
+			if accel_pressed: cmd_throttle = 1.0
+			if brake_pressed: cmd_brake = 1.0
+		Gear.REVERSE:
+			if accel_pressed: cmd_throttle = -reverse_power_ratio
+			if brake_pressed: cmd_brake = 1.0
+		Gear.PARK:
+			cmd_brake = 1.0
+		Gear.NEUTRAL:
+			if brake_pressed: cmd_brake = 1.0
+
+	cmd_steering = 0.0
+	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT): cmd_steering = 1.0
+	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): cmd_steering = -1.0
+
+	if Input.is_key_pressed(KEY_R): respawn()
+	if Input.is_key_pressed(KEY_T): respawn_initial()
+
+func _apply_delayed_controls(delta):
+	## Common path: transport delay → 1st order lag → vehicle controls.
+	_physics_time += delta
+	# Stage 1: pure transport delay
+	var delayed_t = _delay_value(_throttle_delay_buf, cmd_throttle, accel_response_delay)
+	var delayed_b = _delay_value(_brake_delay_buf, cmd_brake, brake_response_delay)
+	var delayed_s = _delay_value(_steering_delay_buf, cmd_steering, steering_response_delay)
+	# Stage 2: 1st order lag (exponential smoothing)
+	_current_throttle = _first_order_lag(_current_throttle, delayed_t, accel_time_constant, delta)
+	_current_brake_val = _first_order_lag(_current_brake_val, delayed_b, brake_time_constant, delta)
+	_current_steering = _first_order_lag(_current_steering, delayed_s, steering_time_constant, delta)
+
+	# Apply to VehicleBody3D
+	var sr = clampf(1.0 - (get_speed_kmh() - steer_speed_threshold) / 100.0,
+					steer_high_speed_ratio, 1.0)
+	steering = _current_steering * max_steer_angle * sr
+	brake = _current_brake_val * max_brake_force
+	engine_force = -_current_throttle * max_engine_force
+
+	# Creep in D/R when idle
+	if absf(_current_throttle) < 0.05 and _current_brake_val < 0.05:
+		var spd = absf(get_forward_speed()) * 3.6
+		if spd < creep_max_speed:
+			var r = 1.0 - spd / creep_max_speed
+			match current_gear:
+				Gear.DRIVE:   engine_force = -creep_force * r
+				Gear.REVERSE: engine_force = creep_force * r
+
+# ==========================================================================
+# Lateral stabilization (simple bicycle model correction)
+# ==========================================================================
+
+func _stabilize_lateral():
+	## Simple lateral force to counter VehicleBody3D's tire model drift.
+	## Does NOT modify velocity directly — only applies corrective force.
+	if not has_ground_contact():
+		return
+	var right = global_transform.basis.x
+	var vy = linear_velocity.dot(right)
+	# Oppose lateral velocity with force proportional to mass
+	apply_central_force(-right * vy * mass * 5.0)
+
+# ==========================================================================
+# Resistance forces
+# ==========================================================================
+
+func _apply_resistance_forces():
+	var speed = linear_velocity.length()
+	if speed < 0.05:
+		return
+	var dir = linear_velocity / speed
+	var f = rolling_resistance_coeff * mass * 9.81
+	f += 0.5 * air_density * drag_coefficient * frontal_area * speed * speed
+	if absf(_current_throttle) < 0.05 and current_gear != Gear.NEUTRAL:
+		f += engine_braking_force * clampf(speed / 10.0, 0.1, 1.0)
+	apply_central_force(-dir * f)
+
+# ==========================================================================
+# Respawn
+# ==========================================================================
+
+func respawn():
+	_respawn_near_road()
+
+func respawn_initial():
+	global_transform = _spawn_transform
+	global_position.y += 2.0
+	_finalize_respawn()
+
+func _respawn_near_road():
+	var yaw = global_rotation.y
+	var space = get_world_3d().direct_space_state
+	var placed := false
+	if space:
+		placed = _raycast_place(space, global_position, yaw)
+		if not placed:
+			var good_yaw = _last_good_transform.basis.get_euler().y
+			placed = _raycast_place(space, _last_good_transform.origin, good_yaw)
+	if not placed:
+		global_transform = _last_good_transform
+		global_position.y += 2.0
+		global_rotation = Vector3(0, _last_good_transform.basis.get_euler().y, 0)
+	_finalize_respawn()
+
+func _raycast_place(space: PhysicsDirectSpaceState3D, pos: Vector3, yaw: float) -> bool:
+	var query = PhysicsRayQueryParameters3D.create(
+		Vector3(pos.x, pos.y + 100, pos.z),
+		Vector3(pos.x, pos.y - 100, pos.z))
+	query.collide_with_bodies = true
+	query.exclude = [get_rid()]
+	var result = space.intersect_ray(query)
+	if result:
+		global_position = result.position + Vector3(0, 2.0, 0)
+		global_rotation = Vector3(0, yaw, 0)
+		return true
+	return false
+
+func _finalize_respawn():
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	_current_throttle = 0.0
+	_current_brake_val = 0.0
+	_current_steering = 0.0
+	_flip_timer = 0.0
+	freeze = true
+	respawned.emit()
+	get_tree().create_timer(0.1).timeout.connect(func():
+		if is_instance_valid(self): freeze = false)
+
+func _record_good_position(delta):
+	_good_pos_timer += delta
+	if _good_pos_timer < 0.5:
+		return
+	_good_pos_timer = 0.0
+	if has_ground_contact():
+		_last_good_transform = global_transform
+
+func _check_auto_respawn(delta):
+	if global_position.y < respawn_below_y:
+		respawn()
+		return
+	if is_flipped():
+		_flip_timer += delta
+		if _flip_timer >= flip_respawn_time: respawn()
+	else:
+		_flip_timer = 0.0
+
+# ==========================================================================
+# Collision detection
+# ==========================================================================
+
+func _on_body_entered(_body: Node):
+	_contact_count += 1
+	is_colliding = true
+
+func _on_body_exited(_body: Node):
+	_contact_count -= 1
+	if _contact_count <= 0:
+		_contact_count = 0
+		is_colliding = false
+
+# ==========================================================================
+# Helpers
+# ==========================================================================
+
+func _wheels() -> Array[VehicleWheel3D]:
+	return [$WheelFL, $WheelFR, $WheelRL, $WheelRR]
+
+func _first_order_lag(current: float, target: float, tc: float, dt: float) -> float:
+	## 1st order lag filter: output approaches target with time constant tc.
+	if tc <= 0.001:
+		return target
+	var alpha = 1.0 - exp(-dt / tc)
+	return lerpf(current, target, alpha)
+
+func _delay_value(buf: Array, input: float, delay_sec: float) -> float:
+	## Pure transport delay using ring buffer.
+	## Returns the input value from delay_sec seconds ago.
+	buf.append([_physics_time, input])
+	# Remove entries older than needed (keep some margin)
+	while buf.size() > 1 and buf[0][0] < _physics_time - delay_sec - 0.1:
+		buf.pop_front()
+	if delay_sec <= 0.001:
+		return input
+	# Find the value from delay_sec ago
+	var target_time = _physics_time - delay_sec
+	if buf[0][0] >= target_time:
+		return buf[0][1]  # buffer doesn't go back far enough yet
+	# Linear search from oldest
+	for i in range(buf.size() - 1):
+		if buf[i + 1][0] >= target_time:
+			return buf[i][1]  # return value just before target_time
+	return input
+
+func _make_box_mesh(w: float, h: float, d: float) -> BoxMesh:
+	var m = BoxMesh.new()
+	m.size = Vector3(w, h, d)
+	return m
+
+func _make_material(color: Color) -> StandardMaterial3D:
+	var m = StandardMaterial3D.new()
+	m.albedo_color = color
+	return m
+
+func _find_or_create_child_mesh(parent: Node) -> MeshInstance3D:
+	for child in parent.get_children():
+		if child is MeshInstance3D:
+			return child
+	var mi = MeshInstance3D.new()
+	mi.material_override = _make_material(Color(0.15, 0.15, 0.15))
+	parent.add_child(mi)
+	return mi

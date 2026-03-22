@@ -1,0 +1,63 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://car.gd" id="1_script"]
+
+[node name="Car" type="VehicleBody3D"]
+mass = 8000.0
+center_of_mass_mode = 1
+center_of_mass = Vector3(0, 0.1, 0)
+script = ExtResource("1_script")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+
+[node name="BodyMesh" type="MeshInstance3D" parent="."]
+
+[node name="CabinMesh" type="MeshInstance3D" parent="."]
+
+[node name="WheelFL" type="VehicleWheel3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.86, 0, -2.38)
+use_as_steering = true
+wheel_radius = 0.373
+wheel_rest_length = 0.4
+suspension_stiffness = 50.0
+suspension_travel = 0.3
+damping_compression = 4.0
+damping_relaxation = 6.0
+wheel_friction_slip = 20.0
+suspension_max_force = 100000.0
+
+[node name="WheelFR" type="VehicleWheel3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.86, 0, -2.38)
+use_as_steering = true
+wheel_radius = 0.373
+wheel_rest_length = 0.4
+suspension_stiffness = 50.0
+suspension_travel = 0.3
+damping_compression = 4.0
+damping_relaxation = 6.0
+wheel_friction_slip = 20.0
+suspension_max_force = 100000.0
+
+[node name="WheelRL" type="VehicleWheel3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.86, 0, 2.38)
+use_as_traction = true
+wheel_radius = 0.373
+wheel_rest_length = 0.4
+suspension_stiffness = 50.0
+suspension_travel = 0.3
+damping_compression = 4.0
+damping_relaxation = 6.0
+wheel_friction_slip = 20.0
+suspension_max_force = 100000.0
+
+[node name="WheelRR" type="VehicleWheel3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.86, 0, 2.38)
+use_as_traction = true
+wheel_radius = 0.373
+wheel_rest_length = 0.4
+suspension_stiffness = 50.0
+suspension_travel = 0.3
+damping_compression = 4.0
+damping_relaxation = 6.0
+wheel_friction_slip = 20.0
+suspension_max_force = 100000.0

@@ -1,0 +1,147 @@
+# Godot Vehicle Simulator for Autoware
+
+A Godot 4-based vehicle dynamics simulator designed as a replacement for Autoware's `simple_planning_simulator`. Features realistic physics, lanelet2 map rendering, and full Autoware interface compatibility via rosbridge.
+
+## Features
+
+- **Vehicle Physics**: VehicleBody3D-based simulation with configurable parameters (mass, wheelbase, suspension, tire grip, etc.)
+- **Autoware Integration**: Drop-in replacement for `simple_planning_simulator` — subscribes to control commands and publishes vehicle status via rosbridge
+- **Lanelet2 Map Rendering**: Dynamically loads lanelet2 maps from `/map/vector_map`, rendering road surfaces, intersection areas, road borders (walls), shoulder areas, and road markings
+- **Viewer Frame Support**: Uses `map → viewer` TF to avoid floating-point precision issues with large map coordinates
+- **In-Game Tuning Panel**: All vehicle parameters adjustable in real-time (Tab key)
+- **Telemetry Graphs**: Real-time lateral/longitudinal G-force, jerk, and control input visualization
+- **Gear System**: P/R/N/D with creep simulation
+- **Transport Delay + 1st Order Lag**: Configurable control response delays for realistic actuator simulation
+- **Sensor Output Delay**: Configurable per-topic output delay for simulating sensor latency
+- **Manual/Autonomous Switching**: M key or Autoware engage topic
+
+## Requirements
+
+- [Godot Engine 4.3+](https://godotengine.org/) (tested with 4.7 dev)
+- [rosbridge_suite](https://github.com/RobotWebTools/rosbridge_suite) (ROS 2)
+- [Autoware](https://github.com/autowarefoundation/autoware) (for lanelet2 maps and control commands)
+- Python 3 with `lanelet2` package (for the bridge node)
+
+## Project Structure
+
+```
+driving_game/
+├── project.godot              # Godot project config
+├── main.tscn / main.gd       # Main scene and setup
+├── car.tscn / car.gd         # Vehicle controller
+├── follow_camera.gd           # Orbit camera (RMB + drag)
+├── ros_bridge.gd              # Autoware ↔ Godot WebSocket bridge
+├── lanelet_map.gd             # Lanelet2 map mesh builder
+├── tuning_panel.gd            # In-game parameter tuning UI
+├── telemetry_graph.gd         # G-force / jerk graphs
+├── control_telemetry.gd       # Throttle / brake / steering graphs
+├── trail_renderer.gd          # Vehicle trajectory trail
+└── scripts/
+    └── lanelet_bridge_node.py # ROS 2 node: lanelet2 → Godot bridge
+```
+
+## Quick Start
+
+### 1. Start rosbridge
+
+```bash
+ros2 launch rosbridge_server rosbridge_websocket_launch.xml max_message_size:=50000000
+```
+
+### 2. Start lanelet bridge (requires Autoware environment)
+
+```bash
+source /path/to/autoware/install/setup.bash
+python3 scripts/lanelet_bridge_node.py
+```
+
+### 3. Start Godot simulator
+
+```bash
+godot --path /path/to/driving_game
+```
+
+Or open the project in the Godot editor and press F5.
+
+### 4. Set initial pose
+
+Use RViz2 to set initial pose (2D Pose Estimate tool), or the car will start on the default ground plane at origin.
+
+## Controls
+
+| Key | Action |
+|-----|--------|
+| W / Up | Accelerate |
+| S / Down | Brake |
+| A / Left | Steer left |
+| D / Right | Steer right |
+| 1 / 2 / 3 / 4 | Gear: P / R / N / D |
+| R | Respawn (nearby road) |
+| T | Respawn (initial position) |
+| M | Toggle Manual / Autonomous |
+| Tab | Open/Close tuning panel |
+| RMB + Drag | Orbit camera |
+| Scroll | Zoom in/out |
+| Esc | Quit |
+
+## Autoware Interface
+
+### Input Topics (Subscribe)
+
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/control/command/control_cmd` | `autoware_control_msgs/msg/Control` | Steering + acceleration command |
+| `/control/command/gear_cmd` | `autoware_vehicle_msgs/msg/GearCommand` | Gear command |
+| `/control/command/turn_indicators_cmd` | `autoware_vehicle_msgs/msg/TurnIndicatorsCommand` | Turn signal |
+| `/control/command/hazard_lights_cmd` | `autoware_vehicle_msgs/msg/HazardLightsCommand` | Hazard lights |
+| `/initialpose3d` | `geometry_msgs/msg/PoseWithCovarianceStamped` | Initial pose |
+| `/vehicle/engage` | `autoware_vehicle_msgs/msg/Engage` | Engage autonomous mode |
+| `/tf_static` | `tf2_msgs/msg/TFMessage` | For `map → viewer` transform |
+
+### Output Topics (Publish)
+
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/tf` | `tf2_msgs/msg/TFMessage` | `map → base_link` transform |
+| `/localization/kinematic_state` | `nav_msgs/msg/Odometry` | Vehicle odometry |
+| `/localization/acceleration` | `geometry_msgs/msg/AccelWithCovarianceStamped` | Vehicle acceleration |
+| `/vehicle/status/velocity_status` | `autoware_vehicle_msgs/msg/VelocityReport` | Velocity report |
+| `/vehicle/status/steering_status` | `autoware_vehicle_msgs/msg/SteeringReport` | Steering angle report |
+| `/vehicle/status/gear_status` | `autoware_vehicle_msgs/msg/GearReport` | Gear report |
+| `/vehicle/status/control_mode` | `autoware_vehicle_msgs/msg/ControlModeReport` | Control mode (Manual/Auto) |
+| `/vehicle/status/turn_indicators_status` | `autoware_vehicle_msgs/msg/TurnIndicatorsReport` | Turn signal status |
+| `/vehicle/status/hazard_lights_status` | `autoware_vehicle_msgs/msg/HazardLightsReport` | Hazard light status |
+
+### Services
+
+| Service | Type | Description |
+|---------|------|-------------|
+| `/control/control_mode_request` | `autoware_vehicle_msgs/srv/ControlModeCommand` | Switch Auto/Manual |
+
+## Lanelet Bridge
+
+The `lanelet_bridge_node.py` subscribes to `/map/vector_map` (LaneletMapBin), deserializes the lanelet2 map, and serves geometry data to Godot via rosbridge services. Godot automatically requests the map data on startup.
+
+### Bridge Services
+
+| Service | Type | Description |
+|---------|------|-------------|
+| `/godot/lanelet_batch_count` | `std_srvs/srv/Trigger` | Returns number of geometry batches |
+| `/godot/lanelet_batch` | `example_interfaces/srv/SetBool` | Returns next batch (data=true to reset) |
+
+## Vehicle Parameters
+
+All parameters are adjustable via the in-game tuning panel (Tab key):
+
+- **Geometry**: Wheelbase, tread, overhang, wheel radius (requires car rebuild)
+- **Powertrain**: Engine force, brake force, steering angle, creep
+- **Transport Delay**: Pure time delay for throttle, brake, steering
+- **Time Constant**: 1st order lag for throttle, brake, steering
+- **Sensor Delay**: Output delay for TF, odometry, velocity, steering, acceleration
+- **Resistance**: Rolling resistance, drag coefficient, frontal area
+- **Suspension**: Stiffness, travel, damping, max force, friction slip
+- **Vehicle**: Weight, center of mass
+
+## License
+
+Apache License 2.0
