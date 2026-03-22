@@ -42,9 +42,24 @@ driving_game/
 
 ## Quick Start
 
-### 1. Start Autoware
+### 1. Start Autoware (with planning simulator disabled)
 
-Launch your Autoware stack as usual. rosbridge_server should be included in the launch.
+Before launching Autoware, comment out the existing `simple_planning_simulator` in your simulator launch file.
+In [`tier4_simulator_launch/launch/simulator.launch.xml`](https://github.com/autowarefoundation/autoware_launch/blob/main/tier4_universe_launch/tier4_simulator_launch/launch/simulator.launch.xml#L273-L279), comment out:
+
+```xml
+<!-- Comment out the following block -->
+<!--
+<group>
+  <push-ros-namespace namespace="simulator"/>
+  <include file="$(find-pkg-share autoware_simple_planning_simulator)/launch/simple_planning_simulator.launch.py">
+    ...
+  </include>
+</group>
+-->
+```
+
+Then launch Autoware as usual. rosbridge_server should be included in the launch.
 If it is not running, start it manually:
 
 ```bash
