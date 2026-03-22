@@ -169,6 +169,10 @@ All parameters are adjustable via the in-game tuning panel (Tab key):
 - **Suspension**: Stiffness, travel, damping, max force, friction slip
 - **Vehicle**: Weight, center of mass
 
+## Web Build (Browser)
+
+The simulator can also run in a web browser. See [docs/web_build.md](docs/web_build.md) for instructions.
+
 ## License
 
 Apache License 2.0
