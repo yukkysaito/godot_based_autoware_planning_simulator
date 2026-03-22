@@ -42,18 +42,26 @@ driving_game/
 
 ## Quick Start
 
-### 1. Start rosbridge
+### 1. Start Autoware
+
+Launch your Autoware stack as usual. rosbridge_server should be included in the launch.
+If it is not running, start it manually:
 
 ```bash
 ros2 launch rosbridge_server rosbridge_websocket_launch.xml max_message_size:=50000000
 ```
 
-### 2. Start lanelet bridge (requires Autoware environment)
+### 2. Start lanelet bridge
+
+This node converts the lanelet2 binary map to geometry data for Godot.
+It needs to be started in an environment where Autoware packages are sourced.
 
 ```bash
 source /path/to/autoware/install/setup.bash
 python3 scripts/lanelet_bridge_node.py
 ```
+
+The bridge stays running and serves map data on demand. You do **not** need to restart it when restarting Godot.
 
 ### 3. Start Godot simulator
 
@@ -62,10 +70,12 @@ godot --path /path/to/driving_game
 ```
 
 Or open the project in the Godot editor and press F5.
+The simulator will automatically connect to rosbridge (ws://localhost:9090) and request the lanelet map.
 
 ### 4. Set initial pose
 
-Use RViz2 to set initial pose (2D Pose Estimate tool), or the car will start on the default ground plane at origin.
+Use RViz2's "2D Pose Estimate" tool to place the vehicle on the map.
+Until an initial pose is set, the vehicle starts on a default 1km x 1km ground plane at the origin.
 
 ## Controls
 
