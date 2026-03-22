@@ -189,33 +189,114 @@ func _setup_ros_bridge():
 	# lanelet_map reference is set later in _setup_lanelet_map()
 	add_child(ros_bridge)
 
+var _dash_speed: Label
+var _dash_unit: Label
+var _dash_gear: Label
+var _dash_mode: Label
+var _dash_status: Label
+var _dash_lights: Label
+var _dash_panel: PanelContainer
+
 func _setup_hud():
 	var hud = CanvasLayer.new()
 	hud.name = "HUD"
 	add_child(hud)
 
-	speed_label = _make_label(Vector2(30, 20), 36, Color.WHITE)
-	speed_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.7))
-	speed_label.add_theme_constant_override("shadow_offset_x", 2)
-	speed_label.add_theme_constant_override("shadow_offset_y", 2)
-	hud.add_child(speed_label)
+	# --- Dashboard panel (top-left) ---
+	_dash_panel = PanelContainer.new()
+	_dash_panel.position = Vector2(20, 16)
+	var dash_style = _make_panel_style(Color(0.08, 0.08, 0.1, 0.88), 10)
+	dash_style.content_margin_left = 20
+	dash_style.content_margin_right = 20
+	dash_style.content_margin_top = 12
+	dash_style.content_margin_bottom = 12
+	_dash_panel.add_theme_stylebox_override("panel", dash_style)
+	hud.add_child(_dash_panel)
 
-	info_label = _make_label(Vector2(30, 70), 16, Color(1, 1, 1, 0.7))
-	info_label.text = "WASD: Drive | 1:P 2:R 3:N 4:D | R: Respawn | T: Init Pos | M: Manual/Auto | Tab: Tuning"
+	var dash_hbox = HBoxContainer.new()
+	dash_hbox.add_theme_constant_override("separation", 16)
+	_dash_panel.add_child(dash_hbox)
+
+	# Speed
+	var speed_vbox = VBoxContainer.new()
+	speed_vbox.add_theme_constant_override("separation", -4)
+	dash_hbox.add_child(speed_vbox)
+	_dash_speed = Label.new()
+	_dash_speed.text = "0"
+	_dash_speed.add_theme_font_size_override("font_size", 52)
+	_dash_speed.add_theme_color_override("font_color", Color.WHITE)
+	_dash_speed.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_dash_speed.custom_minimum_size.x = 100
+	speed_vbox.add_child(_dash_speed)
+	_dash_unit = Label.new()
+	_dash_unit.text = "km/h"
+	_dash_unit.add_theme_font_size_override("font_size", 13)
+	_dash_unit.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
+	_dash_unit.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	speed_vbox.add_child(_dash_unit)
+
+	# Separator
+	var sep = VSeparator.new()
+	sep.add_theme_constant_override("separation", 8)
+	dash_hbox.add_child(sep)
+
+	# Gear + Mode + Status
+	var info_vbox = VBoxContainer.new()
+	info_vbox.add_theme_constant_override("separation", 4)
+	dash_hbox.add_child(info_vbox)
+
+	_dash_gear = Label.new()
+	_dash_gear.text = "P"
+	_dash_gear.add_theme_font_size_override("font_size", 28)
+	_dash_gear.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0))
+	info_vbox.add_child(_dash_gear)
+
+	_dash_mode = Label.new()
+	_dash_mode.text = "MANUAL"
+	_dash_mode.add_theme_font_size_override("font_size", 14)
+	_dash_mode.add_theme_color_override("font_color", Color(0.5, 1.0, 0.5))
+	info_vbox.add_child(_dash_mode)
+
+	_dash_lights = Label.new()
+	_dash_lights.text = ""
+	_dash_lights.add_theme_font_size_override("font_size", 16)
+	info_vbox.add_child(_dash_lights)
+
+	_dash_status = Label.new()
+	_dash_status.text = ""
+	_dash_status.add_theme_font_size_override("font_size", 13)
+	_dash_status.add_theme_color_override("font_color", Color(1, 0.3, 0.2))
+	info_vbox.add_child(_dash_status)
+
+	# --- Hotkey bar (bottom-left) ---
+	info_label = Label.new()
+	info_label.add_theme_font_size_override("font_size", 13)
+	info_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.35))
+	info_label.text = "WASD Drive  |  1234 P/R/N/D  |  Q/E Turn  |  H Hazard  |  R Respawn  |  T Origin  |  M Auto/Manual  |  Tab Tuning"
 	hud.add_child(info_label)
+	# Position at bottom — updated in _update_telemetry_position
 
-	respawn_label = _make_label(Vector2(30, 100), 20, Color(1.0, 0.8, 0.2))
+	# --- Notification (center-top) ---
+	respawn_label = Label.new()
+	respawn_label.add_theme_font_size_override("font_size", 18)
+	respawn_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
+	respawn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	respawn_label.visible = false
 	hud.add_child(respawn_label)
 
+	# Keep old reference for compatibility
+	speed_label = _dash_speed
+
+	# --- Tuning panel ---
 	tuning_panel = PanelContainer.new()
 	tuning_panel.set_script(load("res://tuning_panel.gd"))
-	tuning_panel.position = Vector2(30, 130)
+	tuning_panel.position = Vector2(20, 120)
 	hud.add_child(tuning_panel)
 	tuning_panel.set_car(car)
 	tuning_panel.set_ros_bridge(ros_bridge)
 	tuning_panel.car_rebuild_requested.connect(_on_car_rebuild_requested)
 
+	# --- Telemetry ---
 	telemetry = Control.new()
 	telemetry.set_script(load("res://telemetry_graph.gd"))
 	hud.add_child(telemetry)
@@ -233,22 +314,39 @@ func _setup_hud():
 # Runtime
 # ==========================================================================
 
-func _process(_delta):
+func _process(delta):
 	if not car or not is_instance_valid(car):
 		return
 	var spd = car.get_speed_kmh()
-	var gear = car.get_gear_name()
-	var mode = "AUTO" if ros_bridge.is_autonomous() else "MANUAL"
-	var status = ""
-	if not car.has_ground_contact():
-		status = " [AIR]"
-	elif car.is_colliding:
-		status = " [COLLISION]"
-	speed_label.text = "%d km/h [%s] %s%s" % [int(spd), gear, mode, status]
+	_dash_speed.text = "%d" % int(spd)
+	_dash_gear.text = car.get_gear_name()
+
+	var is_auto = ros_bridge.is_autonomous()
+	_dash_mode.text = "AUTONOMOUS" if is_auto else "MANUAL"
+	_dash_mode.add_theme_color_override("font_color",
+		Color(0.3, 0.7, 1.0) if is_auto else Color(0.5, 1.0, 0.5))
+
 	if car.is_colliding:
-		speed_label.add_theme_color_override("font_color", Color(1, 0.15, 0.1))
+		_dash_status.text = "COLLISION"
+		_dash_speed.add_theme_color_override("font_color", Color(1, 0.2, 0.15))
+	elif not car.has_ground_contact():
+		_dash_status.text = "AIRBORNE"
+		_dash_speed.add_theme_color_override("font_color", Color(1, 0.8, 0.2))
 	else:
-		speed_label.add_theme_color_override("font_color", Color.WHITE)
+		_dash_status.text = ""
+		_dash_speed.add_theme_color_override("font_color", Color.WHITE)
+
+	if car.hazard_lights:
+		_dash_lights.text = "<< HAZARD >>"
+		_dash_lights.add_theme_color_override("font_color", Color(1.0, 0.6, 0.1))
+	elif car.current_turn_signal == car.TurnSignal.LEFT:
+		_dash_lights.text = "<< LEFT"
+		_dash_lights.add_theme_color_override("font_color", Color(0.2, 1.0, 0.4))
+	elif car.current_turn_signal == car.TurnSignal.RIGHT:
+		_dash_lights.text = "RIGHT >>"
+		_dash_lights.add_theme_color_override("font_color", Color(0.2, 1.0, 0.4))
+	else:
+		_dash_lights.text = ""
 
 func _input(event):
 	if not event is InputEventKey or not event.pressed:
@@ -331,6 +429,19 @@ func _update_telemetry_position():
 	telemetry.position = Vector2(vp.x - telemetry.size.x - 10, vp.y - telemetry.size.y - 10)
 	control_telemetry.position = Vector2(vp.x - control_telemetry.size.x - 10,
 		telemetry.position.y - control_telemetry.size.y - 5)
+	# Bottom-left hotkey bar
+	info_label.position = Vector2(20, vp.y - 30)
+	# Center-top notification
+	respawn_label.position = Vector2(vp.x / 2 - 100, 16)
+
+func _make_panel_style(bg_color: Color, radius: int) -> StyleBoxFlat:
+	var s = StyleBoxFlat.new()
+	s.bg_color = bg_color
+	s.corner_radius_top_left = radius
+	s.corner_radius_top_right = radius
+	s.corner_radius_bottom_left = radius
+	s.corner_radius_bottom_right = radius
+	return s
 
 func _make_label(pos: Vector2, size: int, color: Color) -> Label:
 	var l = Label.new()

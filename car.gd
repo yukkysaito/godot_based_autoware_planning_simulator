@@ -16,6 +16,8 @@ enum Gear { PARK, REVERSE, NEUTRAL, DRIVE }
 @export var tread: float = 1.72
 @export var vehicle_weight: float = 8000.0
 @export var wheel_radius_param: float = 0.373
+@export var body_height: float = 2.2            ## Vehicle box height [m]
+@export var body_width_margin: float = 0.36     ## Body width = tread + this [m]
 
 @export_group("Response Delay (transport)")
 @export var accel_response_delay: float = 0.6    ## Pure time delay [s]
@@ -62,7 +64,7 @@ enum Gear { PARK, REVERSE, NEUTRAL, DRIVE }
 @export_group("Physics Material")
 @export var body_bounce: float = 0.0
 @export var body_friction: float = 0.5
-@export var center_of_mass_y: float = 0.1
+@export var center_of_mass_y: float = 0.8        ## Height of CoM from ground [m]
 
 @export_group("Respawn")
 @export var respawn_below_y: float = -100.0
@@ -72,7 +74,11 @@ enum Gear { PARK, REVERSE, NEUTRAL, DRIVE }
 # Runtime state
 # ==========================================================================
 
+enum TurnSignal { OFF, LEFT, RIGHT }
+
 var current_gear: Gear = Gear.PARK
+var current_turn_signal: TurnSignal = TurnSignal.OFF
+var hazard_lights: bool = false
 var input_enabled: bool = true
 var is_colliding: bool = false
 
@@ -96,6 +102,14 @@ var _last_good_transform: Transform3D
 var _flip_timer: float = 0.0
 var _good_pos_timer: float = 0.0
 var _contact_count: int = 0
+
+# Lamp references
+var _brake_lamp_l: MeshInstance3D
+var _brake_lamp_r: MeshInstance3D
+var _turn_lamp_fl: MeshInstance3D
+var _turn_lamp_fr: MeshInstance3D
+var _turn_lamp_rl: MeshInstance3D
+var _turn_lamp_rr: MeshInstance3D
 
 signal respawned
 signal gear_changed(gear: Gear)
@@ -126,6 +140,7 @@ func _physics_process(delta):
 	_apply_delayed_controls(delta)
 	_apply_resistance_forces()
 	_stabilize_lateral()
+	_update_lamps()
 	_record_good_position(delta)
 	_check_auto_respawn(delta)
 
@@ -136,7 +151,10 @@ func _physics_process(delta):
 func apply_vehicle_params():
 	mass = vehicle_weight
 	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
-	center_of_mass = Vector3(0, center_of_mass_y, 0)
+	# Convert ground-based CoM height to local coords (wheel axis = body origin)
+	# Ground is at approximately -(wheel_radius + suspension_rest_length) below body origin
+	var ground_to_axis = wheel_radius_param + suspension_rest_length_val * 0.9
+	center_of_mass = Vector3(0, center_of_mass_y - ground_to_axis, 0)
 	continuous_cd = false
 	var mat = PhysicsMaterial.new()
 	mat.bounce = body_bounce
@@ -145,6 +163,7 @@ func apply_vehicle_params():
 	_apply_wheel_params()
 	_build_body_visual()
 	_build_wheel_visuals()
+	_build_lamps()
 
 func _apply_wheel_params():
 	for w in _wheels():
@@ -159,42 +178,153 @@ func _apply_wheel_params():
 
 func _build_body_visual():
 	var total_len = front_overhang + wheel_base + rear_overhang
-	var body_w = tread + 0.36
-	var body_h = 0.9
+	var body_w = tread + body_width_margin
 	var cz = (rear_overhang - front_overhang) / 2.0
-	var body_y = body_h / 2.0 + wheel_radius_param + 0.1
+	var box_y = body_height / 2.0 + wheel_radius_param + 0.05
 
+	# Collision = same as visual box
 	var col: CollisionShape3D = $CollisionShape3D
 	var box = BoxShape3D.new()
-	box.size = Vector3(body_w, body_h, total_len)
+	box.size = Vector3(body_w, body_height, total_len)
 	col.shape = box
-	col.position = Vector3(0, body_y, cz)
+	col.position = Vector3(0, box_y, cz)
 
+	# Visual body
 	var body_mesh: MeshInstance3D = $BodyMesh
-	body_mesh.mesh = _make_box_mesh(body_w, body_h, total_len)
+	body_mesh.mesh = _make_box_mesh(body_w, body_height, total_len)
 	body_mesh.position = col.position
 	if not body_mesh.material_override:
-		body_mesh.material_override = _make_material(Color(0.15, 0.55, 0.25))
+		var bm = _make_material(Color(0.18, 0.22, 0.28, 0.7))
+		bm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		body_mesh.material_override = bm
 
+	# Center of mass marker (red sphere)
 	var cabin: MeshInstance3D = $CabinMesh
-	var cab_h = 1.2
-	var cab_len = wheel_base + 0.5
-	cabin.mesh = _make_box_mesh(body_w, cab_h, cab_len)
-	cabin.position = Vector3(0, body_h + cab_h / 2.0, cz)
-	if not cabin.material_override:
-		var m = _make_material(Color(0.85, 0.85, 0.85, 0.8))
-		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		cabin.material_override = m
+	cabin.visible = true
+	var sphere = SphereMesh.new()
+	sphere.radius = 0.15
+	sphere.height = 0.3
+	sphere.radial_segments = 12
+	sphere.rings = 6
+	cabin.mesh = sphere
+	# Position sphere at CoM in local coords (same as physics center_of_mass)
+	cabin.position = center_of_mass
+	if not cabin.material_override or not cabin.material_override is StandardMaterial3D:
+		var cm_mat = StandardMaterial3D.new()
+		cm_mat.albedo_color = Color(1.0, 0.3, 0.2, 0.5)
+		cm_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		cabin.material_override = cm_mat
 
 func _build_wheel_visuals():
 	for wheel in _wheels():
+		# Tire
 		var mi := _find_or_create_child_mesh(wheel)
 		mi.transform = Transform3D(Basis(Vector3.FORWARD, PI / 2.0), Vector3.ZERO)
 		var cyl = CylinderMesh.new()
 		cyl.top_radius = wheel_radius_param
 		cyl.bottom_radius = wheel_radius_param
-		cyl.height = 0.25
+		cyl.height = 0.28
+		cyl.radial_segments = 16
 		mi.mesh = cyl
+		if not mi.material_override or mi.material_override.albedo_color != Color(0.1, 0.1, 0.1):
+			mi.material_override = _make_material(Color(0.1, 0.1, 0.1))
+		# Hub cap (smaller lighter cylinder)
+		var hub: MeshInstance3D = null
+		for child in wheel.get_children():
+			if child is MeshInstance3D and child != mi:
+				hub = child
+				break
+		if hub == null:
+			hub = MeshInstance3D.new()
+			hub.material_override = _make_material(Color(0.4, 0.4, 0.45))
+			wheel.add_child(hub)
+		hub.transform = Transform3D(Basis(Vector3.FORWARD, PI / 2.0), Vector3.ZERO)
+		var hub_cyl = CylinderMesh.new()
+		hub_cyl.top_radius = wheel_radius_param * 0.5
+		hub_cyl.bottom_radius = wheel_radius_param * 0.5
+		hub_cyl.height = 0.30
+		hub_cyl.radial_segments = 12
+		hub.mesh = hub_cyl
+
+# ==========================================================================
+# Lamps
+# ==========================================================================
+
+const _LAMP_OFF_DIM = 0.15
+const _LAMP_SIZE = Vector3(0.15, 0.12, 0.05)
+
+func _build_lamps():
+	var total_len = front_overhang + wheel_base + rear_overhang
+	var body_w = tread + body_width_margin
+	var hw = body_w / 2.0
+	var hd = total_len / 2.0
+	var cz = (rear_overhang - front_overhang) / 2.0
+	var lamp_y = wheel_radius_param + body_height * 0.35
+
+	# Rear: brake lamps (red) — at back face, left and right
+	_brake_lamp_l = _get_or_create_lamp("BrakeLampL")
+	_brake_lamp_l.position = Vector3(-hw * 0.7, lamp_y, cz + hd + 0.01)
+	_brake_lamp_r = _get_or_create_lamp("BrakeLampR")
+	_brake_lamp_r.position = Vector3(hw * 0.7, lamp_y, cz + hd + 0.01)
+
+	# Rear: turn lamps (amber) — outside of brake lamps
+	_turn_lamp_rl = _get_or_create_lamp("TurnLampRL")
+	_turn_lamp_rl.position = Vector3(-hw * 0.95, lamp_y, cz + hd + 0.01)
+	_turn_lamp_rr = _get_or_create_lamp("TurnLampRR")
+	_turn_lamp_rr.position = Vector3(hw * 0.95, lamp_y, cz + hd + 0.01)
+
+	# Front: turn lamps (amber) — at front face corners
+	_turn_lamp_fl = _get_or_create_lamp("TurnLampFL")
+	_turn_lamp_fl.position = Vector3(-hw * 0.95, lamp_y, cz - hd - 0.01)
+	_turn_lamp_fr = _get_or_create_lamp("TurnLampFR")
+	_turn_lamp_fr.position = Vector3(hw * 0.95, lamp_y, cz - hd - 0.01)
+
+	# Initialize all off
+	_update_lamps()
+
+func _get_or_create_lamp(lamp_name: String) -> MeshInstance3D:
+	var existing = get_node_or_null(lamp_name)
+	if existing and existing is MeshInstance3D:
+		return existing
+	var mi = MeshInstance3D.new()
+	mi.name = lamp_name
+	var bm = BoxMesh.new()
+	bm.size = _LAMP_SIZE
+	mi.mesh = bm
+	var mat = StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.emission_enabled = true
+	mat.emission_energy_multiplier = 0.0
+	mi.material_override = mat
+	add_child(mi)
+	return mi
+
+func _set_lamp(lamp: MeshInstance3D, color: Color, on: bool):
+	if not lamp or not lamp.material_override:
+		return
+	var mat: StandardMaterial3D = lamp.material_override
+	if on:
+		mat.albedo_color = color
+		mat.emission = color
+		mat.emission_energy_multiplier = 3.0
+	else:
+		mat.albedo_color = color * _LAMP_OFF_DIM
+		mat.emission_energy_multiplier = 0.0
+
+func _update_lamps():
+	# Brake: on when brake is pressed
+	var braking = _current_brake_val > 0.05
+	_set_lamp(_brake_lamp_l, Color(1, 0, 0), braking)
+	_set_lamp(_brake_lamp_r, Color(1, 0, 0), braking)
+
+	# Turn signals / hazard
+	var left_on = hazard_lights or current_turn_signal == TurnSignal.LEFT
+	var right_on = hazard_lights or current_turn_signal == TurnSignal.RIGHT
+	var amber = Color(1.0, 0.6, 0.0)
+	_set_lamp(_turn_lamp_fl, amber, left_on)
+	_set_lamp(_turn_lamp_rl, amber, left_on)
+	_set_lamp(_turn_lamp_fr, amber, right_on)
+	_set_lamp(_turn_lamp_rr, amber, right_on)
 
 # ==========================================================================
 # Queries
@@ -229,6 +359,27 @@ func set_gear(g: Gear):
 # ==========================================================================
 # Manual input
 # ==========================================================================
+
+func _unhandled_key_input(event: InputEvent):
+	if not input_enabled or not event.pressed or event.echo:
+		return
+	match event.keycode:
+		KEY_Q:  # Left turn signal toggle
+			if current_turn_signal == TurnSignal.LEFT:
+				current_turn_signal = TurnSignal.OFF
+			else:
+				current_turn_signal = TurnSignal.LEFT
+				hazard_lights = false
+		KEY_E:  # Right turn signal toggle
+			if current_turn_signal == TurnSignal.RIGHT:
+				current_turn_signal = TurnSignal.OFF
+			else:
+				current_turn_signal = TurnSignal.RIGHT
+				hazard_lights = false
+		KEY_H:  # Hazard toggle
+			hazard_lights = not hazard_lights
+			if hazard_lights:
+				current_turn_signal = TurnSignal.OFF
 
 func _read_keyboard_input():
 	## Read keyboard and write to cmd_* variables.

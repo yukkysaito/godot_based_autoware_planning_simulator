@@ -461,13 +461,23 @@ func _publish_control_mode_report(now: Dictionary):
 	})
 
 func _publish_turn_indicators_report(now: Dictionary):
+	# Sync from car state (manual) or Autoware command (auto)
+	var report = current_turn_indicator
+	if car and is_instance_valid(car) and car.input_enabled:
+		match car.current_turn_signal:
+			car.TurnSignal.OFF: report = 1   # DISABLE
+			car.TurnSignal.LEFT: report = 2  # ENABLE_LEFT
+			car.TurnSignal.RIGHT: report = 3 # ENABLE_RIGHT
 	_send_json({
 		"op": "publish",
 		"topic": "/vehicle/status/turn_indicators_status",
-		"msg": {"stamp": now, "report": current_turn_indicator}
+		"msg": {"stamp": now, "report": report}
 	})
 
 func _publish_hazard_lights_report(now: Dictionary):
+	var report = current_hazard_lights
+	if car and is_instance_valid(car) and car.input_enabled:
+		report = 2 if car.hazard_lights else 1  # ENABLE / DISABLE
 	_send_json({
 		"op": "publish",
 		"topic": "/vehicle/status/hazard_lights_status",

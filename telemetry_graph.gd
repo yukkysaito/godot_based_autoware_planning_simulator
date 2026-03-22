@@ -87,8 +87,13 @@ func _physics_process(delta: float):
 		queue_redraw()
 
 func _draw():
-	draw_rect(Rect2(Vector2.ZERO, size), Color(0.05, 0.05, 0.08, 0.85))
-	draw_string(ThemeDB.fallback_font, Vector2(8, 16), "Telemetry (10s)", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1, 0.9, 0.3))
+	# Rounded background
+	var bg = StyleBoxFlat.new()
+	bg.bg_color = Color(0.06, 0.06, 0.09, 0.88)
+	bg.corner_radius_top_left = 8; bg.corner_radius_top_right = 8
+	bg.corner_radius_bottom_left = 8; bg.corner_radius_bottom_right = 8
+	draw_style_box(bg, Rect2(Vector2.ZERO, size))
+	draw_string(ThemeDB.fallback_font, Vector2(10, 16), "Dynamics", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 1, 1, 0.4))
 
 	var y_off = 25.0
 	_draw_graph("Lat G", _lat_g, y_off, Color(0.2, 0.8, 1.0), _filt_lat_g, "%.2f G", "G")

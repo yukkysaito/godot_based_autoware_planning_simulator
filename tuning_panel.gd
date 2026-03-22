@@ -8,7 +8,8 @@ var _sliders: Dictionary = {}
 
 signal car_rebuild_requested
 
-const GEOM_PROPS = ["wheel_base", "tread", "front_overhang", "rear_overhang", "wheel_radius_param"]
+const GEOM_PROPS = ["wheel_base", "tread", "front_overhang", "rear_overhang", "wheel_radius_param",
+	"body_height", "body_width_margin"]
 
 # "target" field: "car" or "bridge" — determines which node the property lives on.
 const PARAMS = [
@@ -18,6 +19,7 @@ const PARAMS = [
 	{"name": "Front Overhang [m]", "prop": "front_overhang", "min": 0.3, "max": 2.0, "step": 0.05, "target": "car"},
 	{"name": "Rear Overhang [m]", "prop": "rear_overhang", "min": 0.3, "max": 2.0, "step": 0.05, "target": "car"},
 	{"name": "Wheel Radius [m]", "prop": "wheel_radius_param", "min": 0.2, "max": 0.6, "step": 0.01, "target": "car"},
+	{"name": "Body Height [m]", "prop": "body_height", "min": 0.5, "max": 4.0, "step": 0.1, "target": "car"},
 	{"group": "Powertrain"},
 	{"name": "Max Engine Force [N]", "prop": "max_engine_force", "min": 1000, "max": 20000, "step": 100, "target": "car"},
 	{"name": "Max Brake Force", "prop": "max_brake_force", "min": 10, "max": 1000, "step": 10, "target": "car"},
@@ -64,11 +66,11 @@ func _ready():
 
 func _build_ui():
 	var style = StyleBoxFlat.new()
-	style.bg_color = Color(0.1, 0.1, 0.12, 0.9)
-	style.corner_radius_top_left = 8
-	style.corner_radius_top_right = 8
-	style.corner_radius_bottom_left = 8
-	style.corner_radius_bottom_right = 8
+	style.bg_color = Color(0.06, 0.06, 0.09, 0.92)
+	style.corner_radius_top_left = 10
+	style.corner_radius_top_right = 10
+	style.corner_radius_bottom_left = 10
+	style.corner_radius_bottom_right = 10
 	style.content_margin_left = 12
 	style.content_margin_right = 12
 	style.content_margin_top = 8
@@ -84,9 +86,9 @@ func _build_ui():
 	scroll.add_child(vbox)
 
 	var title = Label.new()
-	title.text = "Vehicle Tuning [Tab to close]"
-	title.add_theme_font_size_override("font_size", 18)
-	title.add_theme_color_override("font_color", Color(1, 0.9, 0.3))
+	title.text = "Vehicle Tuning"
+	title.add_theme_font_size_override("font_size", 16)
+	title.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
 	vbox.add_child(title)
 	vbox.add_child(HSeparator.new())
 
