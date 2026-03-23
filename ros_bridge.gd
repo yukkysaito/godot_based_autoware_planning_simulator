@@ -17,6 +17,9 @@ var viewer_offset_valid: bool = false
 
 ## Sensor output delays [s]. Each topic's data is buffered and published
 ## after the specified delay to simulate real sensor latency.
+@export_group("Control Mapping")
+@export var full_brake_decel: float = 0.4  ## Deceleration [m/s²] that maps to cmd_brake=1.0
+
 @export_group("Sensor Delay")
 @export var odom_delay: float = 0.0       ## /localization/kinematic_state
 @export var velocity_delay: float = 0.0   ## /vehicle/status/velocity_status
@@ -153,8 +156,27 @@ func _apply_autoware_control():
 		car.cmd_brake = 0.0
 	else:
 		car.cmd_throttle = 0.0
-		var brake_force = car.mass * absf(accel)
-		car.cmd_brake = clampf(brake_force / (car.max_brake_force * 4.0), 0.0, 1.0)
+		var speed = absf(car.get_forward_speed())
+		var coast = car.rolling_resistance_coeff * 9.81 \
+			+ 0.5 * car.air_density * car.drag_coefficient * car.frontal_area * speed * speed / car.mass \
+			+ car.engine_braking_force * clampf(speed / 10.0, 0.1, 1.0) / car.mass
+		var brake_decel = maxf(absf(accel) - coast, 0.0)
+		var brake_range = maxf(full_brake_decel - coast, 0.01)
+		car.cmd_brake = clampf(brake_decel / brake_range, 0.0, 1.0)
+
+	# Turn indicators: 1=DISABLE, 2=LEFT, 3=RIGHT
+	match current_turn_indicator:
+		2:
+			car.current_turn_signal = car.TurnSignal.LEFT
+		3:
+			car.current_turn_signal = car.TurnSignal.RIGHT
+		_:
+			car.current_turn_signal = car.TurnSignal.OFF
+
+	# Hazard lights: 1=DISABLE, 2=ENABLE
+	car.hazard_lights = (current_hazard_lights == 2)
+	if car.hazard_lights:
+		car.current_turn_signal = car.TurnSignal.OFF
 
 	car.input_enabled = false
 
@@ -481,7 +503,7 @@ func _publish_hazard_lights_report(now: Dictionary):
 	_send_json({
 		"op": "publish",
 		"topic": "/vehicle/status/hazard_lights_status",
-		"msg": {"stamp": now, "report": current_hazard_lights}
+		"msg": {"stamp": now, "report": report}
 	})
 
 func _publish_acceleration(now: Dictionary):

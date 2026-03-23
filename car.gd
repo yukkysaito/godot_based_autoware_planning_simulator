@@ -31,7 +31,7 @@ enum Gear { PARK, REVERSE, NEUTRAL, DRIVE }
 
 @export_group("Powertrain")
 @export var max_engine_force: float = 10000.0
-@export var max_brake_force: float = 300.0
+@export var max_brake_force: float = 100.0
 @export var max_steer_angle: float = 0.61
 @export var reverse_power_ratio: float = 0.3
 @export var steer_speed_threshold: float = 30.0
@@ -337,7 +337,7 @@ func get_forward_speed() -> float:
 	return linear_velocity.dot(-global_transform.basis.z)
 
 func get_speed_kmh() -> float:
-	return linear_velocity.length() * 3.6
+	return absf(get_forward_speed()) * 3.6
 
 func is_flipped() -> bool:
 	return global_transform.basis.y.dot(Vector3.UP) < 0.3
