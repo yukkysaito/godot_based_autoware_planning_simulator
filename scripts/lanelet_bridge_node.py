@@ -86,10 +86,12 @@ class LaneletBridgeNode(Node):
         road_borders = self._extract_road_borders(lanelet_map)
         shoulders = self._extract_shoulders(lanelet_map)
         road_markings = self._extract_road_markings(lanelet_map)
+        traffic_light_groups = self._extract_traffic_light_groups(lanelet_map)
 
         self.get_logger().info(
             f"Prepared: {len(all_lanelets)} ll, {len(intersection_areas)} ia, "
-            f"{len(road_borders)} rb, {len(shoulders)} sh, {len(road_markings)} rm"
+            f"{len(road_borders)} rb, {len(shoulders)} sh, {len(road_markings)} rm, "
+            f"{len(traffic_light_groups)} tl"
         )
 
         # Build all batch payloads
@@ -114,6 +116,8 @@ class LaneletBridgeNode(Node):
             chunk = road_markings[i:i+BS]
             if chunk:
                 self._batches.append({"road_markings": chunk})
+        if traffic_light_groups:
+            self._batches.append({"traffic_light_groups": traffic_light_groups})
 
         self.get_logger().info(f"Ready: {len(self._batches)} batches for serving")
 
@@ -268,6 +272,212 @@ class LaneletBridgeNode(Node):
                 continue
             markings.append({"points": pts, "type": t})
         return markings
+
+    def _extract_traffic_light_groups(self, lanelet_map) -> list:
+        """Extract traffic light groups from regulatory elements."""
+        groups = []
+        seen_ids: set = set()
+
+        for ll in lanelet_map.laneletLayer:
+            for reg in ll.regulatoryElements:
+                if reg.id in seen_ids:
+                    continue
+                seen_ids.add(reg.id)
+
+                try:
+                    subtype = str(reg.attributes["subtype"])
+                except Exception:
+                    continue
+                if subtype != "traffic_light":
+                    continue
+
+                # Get referred linestrings (traffic light fixtures)
+                refers = []
+                try:
+                    refers = list(reg.parameters["refers"])
+                except Exception:
+                    pass
+                if not refers:
+                    continue
+
+                # Get light_bulbs linestrings if available (Autoware extension)
+                light_bulb_linestrings = []
+                try:
+                    light_bulb_linestrings = list(reg.parameters["light_bulbs"])
+                except Exception:
+                    pass
+
+                # Build boards_map: linestring_id -> board dict
+                boards_map = {}
+                for fixture_ls in refers:
+                    try:
+                        pts = list(fixture_ls)
+                    except Exception:
+                        continue
+                    if len(pts) < 2:
+                        continue
+
+                    # Read height attribute (same as C++ vector_map.cpp)
+                    height = 0.7
+                    try:
+                        if "height" in fixture_ls.attributes:
+                            height = float(fixture_ls.attributes["height"])
+                    except Exception:
+                        pass
+
+                    front = pts[0]
+                    back = pts[-1]
+
+                    board = self._compute_tl_board(front, back, height)
+                    boards_map[fixture_ls.id] = board
+
+                # Extract bulbs, keyed by board id
+                light_bulbs_map = {}
+                for bulb_ls in light_bulb_linestrings:
+                    try:
+                        board_id = int(bulb_ls.attributes["traffic_light_id"])
+                    except Exception:
+                        continue
+                    bulb_list = []
+                    for pt in bulb_ls:
+                        color = "none"
+                        arrow = "none"
+                        radius = 0.1
+                        try:
+                            color = str(pt.attributes["color"])
+                        except Exception:
+                            pass
+                        try:
+                            arrow = str(pt.attributes["arrow"])
+                        except Exception:
+                            pass
+                        try:
+                            radius = float(pt.attributes["radius"])
+                        except Exception:
+                            pass
+                        # Bulb normal inherited from board (same as C++)
+                        normal = boards_map[board_id]["normal"] \
+                            if board_id in boards_map else [1.0, 0.0, 0.0]
+                        bulb_list.append({
+                            "position": [round(pt.x, 3), round(pt.y, 3),
+                                         round(pt.z, 3)],
+                            "radius": radius,
+                            "color": color,
+                            "arrow": arrow,
+                            "normal": normal,
+                        })
+                    if bulb_list:
+                        light_bulbs_map[board_id] = bulb_list
+
+                # Assemble traffic_lights per board
+                traffic_lights = []
+                for ls_id, board in boards_map.items():
+                    bulbs = light_bulbs_map.get(ls_id, [])
+                    if not bulbs:
+                        # Fallback: generate default bulbs
+                        front = list(refers[0])[0]
+                        back = list(refers[0])[-1]
+                        bulbs = self._default_tl_bulbs(front, back, height)
+                        for b in bulbs:
+                            b["normal"] = board["normal"]
+                    traffic_lights.append({
+                        "board": board,
+                        "light_bulbs": bulbs,
+                    })
+
+                if traffic_lights:
+                    groups.append({
+                        "group_id": int(reg.id),
+                        "traffic_lights": traffic_lights,
+                    })
+
+        self.get_logger().info(
+            f"Extracted {len(groups)} traffic light groups"
+        )
+        return groups
+
+    @staticmethod
+    def _compute_tl_board(front, back, height: float) -> dict:
+        """Compute board from linestring front/back points + height attribute.
+
+        Matches C++ vector_map.cpp logic exactly:
+        - Bottom corners at linestring z
+        - Top corners at linestring z + height
+        - Normal = cross(right_top - left_top, left_bottom - left_top)
+        """
+        # 4 corners (same as C++)
+        # front = left, back = right
+        lt = [front.x, front.y, front.z + height]  # left_top
+        rt = [back.x,  back.y,  back.z + height]   # right_top
+        lb = [front.x, front.y, front.z]            # left_bottom
+        rb = [back.x,  back.y,  back.z]             # right_bottom
+
+        # Center
+        cx = (lt[0] + rt[0] + lb[0] + rb[0]) / 4.0
+        cy = (lt[1] + rt[1] + lb[1] + rb[1]) / 4.0
+        cz = (lt[2] + rt[2] + lb[2] + rb[2]) / 4.0
+
+        # Width = horizontal distance between front and back
+        dx = back.x - front.x
+        dy = back.y - front.y
+        board_w = (dx ** 2 + dy ** 2) ** 0.5
+
+        # Height = the height attribute
+        board_h = height
+
+        # Normal = cross(right_top - left_top, left_bottom - left_top)
+        # u = rt - lt = (dx, dy, dz_top)
+        ux = rt[0] - lt[0]
+        uy = rt[1] - lt[1]
+        uz = rt[2] - lt[2]
+        # v = lb - lt = (0, 0, -height)
+        vx = lb[0] - lt[0]
+        vy = lb[1] - lt[1]
+        vz = lb[2] - lt[2]
+        # cross product
+        nx = uy * vz - uz * vy
+        ny = uz * vx - ux * vz
+        nz = ux * vy - uy * vx
+        nl = max((nx ** 2 + ny ** 2 + nz ** 2) ** 0.5, 0.001)
+        nx /= nl
+        ny /= nl
+        nz /= nl
+
+        return {
+            "center": [round(cx, 3), round(cy, 3), round(cz, 3)],
+            "width": round(board_w, 3),
+            "height": round(board_h, 3),
+            "normal": [round(nx, 6), round(ny, 6), round(nz, 6)],
+        }
+
+    @staticmethod
+    def _default_tl_bulbs(front, back, height: float) -> list:
+        """Create default red/yellow/green bulbs between front/back at mid-height."""
+        cx = (front.x + back.x) / 2.0
+        cy = (front.y + back.y) / 2.0
+        cz = (front.z + back.z) / 2.0 + height / 2.0  # mid-height of board
+
+        dx = back.x - front.x
+        dy = back.y - front.y
+        horiz_ext = max((dx ** 2 + dy ** 2) ** 0.5, 0.01)
+        hdx = dx / horiz_ext
+        hdy = dy / horiz_ext
+
+        spacing = horiz_ext / 3.0 if horiz_ext > 0.3 else 0.12
+        bulbs = []
+        for i, color in enumerate(["red", "yellow", "green"]):
+            offset = (i - 1) * spacing
+            bulbs.append({
+                "position": [
+                    round(cx + hdx * offset, 3),
+                    round(cy + hdy * offset, 3),
+                    round(cz, 3),
+                ],
+                "radius": min(spacing * 0.4, 0.1),
+                "color": color,
+                "arrow": "none",
+            })
+        return bulbs
 
 
 def main():

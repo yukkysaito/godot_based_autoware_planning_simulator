@@ -3,12 +3,13 @@ extends Node3D
 ## Flow: get batch count → fetch each batch one by one → build mesh.
 
 var ros_bridge: Node
+var traffic_light_manager: Node3D  # traffic_light_manager.gd
 
-@export var road_color: Color = Color(0.25, 0.25, 0.27)
-@export var wall_color: Color = Color(0.55, 0.45, 0.35)
-@export var wall_height: float = 3.0
-@export var marking_color: Color = Color(0.9, 0.9, 0.9)
-@export var marking_width: float = 0.1
+@export var road_color: Color = Color(0, 0.0745098, 0.137255, 1)
+@export var wall_color: Color = Color(0.15, 0.25, 0.4, 0.6)
+@export var wall_height: float = 2.0
+@export var marking_color: Color = Color(0.529412, 0.529412, 0.529412, 1)
+@export var marking_width: float = 0.05
 @export var marking_y_offset: float = 0.02
 
 var _total_batches: int = 0
@@ -18,6 +19,7 @@ var _all_intersection_areas: Array = []
 var _all_road_borders: Array = []
 var _all_shoulders: Array = []
 var _all_road_markings: Array = []
+var _all_traffic_light_groups: Array = []
 var _built: bool = false
 var _fetching: bool = false
 var _retry_timer: float = 0.0
@@ -93,6 +95,7 @@ func _ingest_batch(data: Dictionary):
 	_all_road_borders.append_array(data.get("road_borders", []))
 	_all_shoulders.append_array(data.get("shoulders", []))
 	_all_road_markings.append_array(data.get("road_markings", []))
+	_all_traffic_light_groups.append_array(data.get("traffic_light_groups", []))
 
 func _build_map():
 	_built = true
@@ -163,6 +166,9 @@ func _build_map():
 	var mi = MeshInstance3D.new()
 	mi.mesh = mesh
 	var mat = StandardMaterial3D.new()
+	mat.render_priority = -3
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.albedo_color = road_color
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mi.material_override = mat
@@ -176,6 +182,11 @@ func _build_map():
 		bb_min = Vector3(minf(bb_min.x, v.x), minf(bb_min.y, v.y), minf(bb_min.z, v.z))
 		bb_max = Vector3(maxf(bb_max.x, v.x), maxf(bb_max.y, v.y), maxf(bb_max.z, v.z))
 	var center = (bb_min + bb_max) / 2.0
+	# Build traffic lights if data available
+	if _all_traffic_light_groups.size() > 0 and traffic_light_manager:
+		var converted_groups = _convert_traffic_light_groups(_all_traffic_light_groups)
+		traffic_light_manager.set_map(converted_groups)
+
 	print("[LaneletMap] === MAP LOADED ===")
 	print("[LaneletMap]   Center: (%.1f, %.1f, %.1f)" % [center.x, center.y, center.z])
 	map_loaded.emit()
@@ -221,8 +232,14 @@ func _build_walls():
 	a[Mesh.ARRAY_VERTEX] = wv; a[Mesh.ARRAY_NORMAL] = wn; a[Mesh.ARRAY_INDEX] = wi
 	var wm = ArrayMesh.new(); wm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, a)
 	var mi = MeshInstance3D.new(); mi.mesh = wm
-	var mat = StandardMaterial3D.new(); mat.albedo_color = wall_color
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED; mi.material_override = mat
+	var mat = StandardMaterial3D.new()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = wall_color
+	mat.emission_enabled = true
+	mat.emission = Color(0.05, 0.1, 0.2, 1)
+	mat.emission_energy_multiplier = 2.0
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mi.material_override = mat
 	add_child(mi)
 	_add_trimesh_collision(wm)
 	print("[LaneletMap] Walls: %d borders" % borders.size())
@@ -255,8 +272,15 @@ func _build_road_markings():
 	var mm = ArrayMesh.new(); mm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, a)
 	var st = SurfaceTool.new(); st.create_from(mm, 0); st.generate_normals(); mm = st.commit()
 	var mi = MeshInstance3D.new(); mi.mesh = mm
-	var mat = StandardMaterial3D.new(); mat.albedo_color = marking_color
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED; mi.material_override = mat
+	var mat = StandardMaterial3D.new()
+	mat.render_priority = -2
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = marking_color
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.proximity_fade_distance = 1000.0
+	mat.distance_fade_max_distance = 200.0
+	mi.material_override = mat
 	add_child(mi)
 	print("[LaneletMap] Markings: %d lines" % markings.size())
 
@@ -269,6 +293,73 @@ func _to_godot_points(pts: Array) -> PackedVector3Array:
 		for p in pts:
 			result.append(Vector3(-float(p[1]), float(p[2]), -float(p[0])))
 	return result
+
+func _convert_traffic_light_groups(groups: Array) -> Array:
+	## Convert ROS-frame traffic light group data to Godot-frame.
+	var result: Array = []
+	for g in groups:
+		if typeof(g) != TYPE_DICTIONARY:
+			continue
+		var gid = g.get("group_id", -1)
+		var tls_raw = g.get("traffic_lights", [])
+		if typeof(tls_raw) != TYPE_ARRAY:
+			continue
+		var tls_converted: Array = []
+		for tl in tls_raw:
+			if typeof(tl) != TYPE_DICTIONARY:
+				continue
+			var converted_tl: Dictionary = {}
+			# Convert board (center + normal only; width/height are scalars in meters)
+			if tl.has("board") and typeof(tl["board"]) == TYPE_DICTIONARY:
+				var board = tl["board"]
+				var cb: Dictionary = {}
+				if board.has("center"):
+					cb["position"] = _ros_point_to_godot(board["center"])
+				if board.has("normal"):
+					cb["normal"] = _ros_normal_to_godot(board["normal"])
+				cb["width"] = float(board.get("width", 0.4))
+				cb["height"] = float(board.get("height", 0.9))
+				converted_tl["board"] = cb
+			# Convert bulbs
+			if tl.has("light_bulbs") and typeof(tl["light_bulbs"]) == TYPE_ARRAY:
+				var bulbs_out: Array = []
+				for bulb in tl["light_bulbs"]:
+					if typeof(bulb) != TYPE_DICTIONARY:
+						continue
+					var cb_bulb: Dictionary = {}
+					if bulb.has("position"):
+						cb_bulb["position"] = _ros_point_to_godot(bulb["position"])
+					cb_bulb["radius"] = float(bulb.get("radius", 0.05))
+					if bulb.has("normal"):
+						cb_bulb["normal"] = _ros_normal_to_godot(bulb["normal"])
+					else:
+						cb_bulb["normal"] = Vector3.FORWARD
+					cb_bulb["color"] = str(bulb.get("color", "none"))
+					cb_bulb["arrow"] = str(bulb.get("arrow", "none"))
+					bulbs_out.append(cb_bulb)
+				converted_tl["light_bulbs"] = bulbs_out
+			tls_converted.append(converted_tl)
+		result.append({"group_id": gid, "traffic_lights": tls_converted})
+	return result
+
+func _ros_point_to_godot(p) -> Vector3:
+	## Convert a ROS point (Array [x,y,z] or Dictionary {x,y,z}) to Godot.
+	if p is Array and p.size() >= 3:
+		return ros_bridge.ros_map_to_godot(float(p[0]), float(p[1]), float(p[2]))
+	elif p is Dictionary:
+		return ros_bridge.ros_map_to_godot(
+			float(p.get("x", 0)), float(p.get("y", 0)), float(p.get("z", 0)))
+	return Vector3.ZERO
+
+func _ros_normal_to_godot(n) -> Vector3:
+	## Convert a ROS normal direction to Godot frame (rotation only, no offset).
+	var rx: float = 0; var ry: float = 0; var rz: float = 0
+	if n is Array and n.size() >= 3:
+		rx = float(n[0]); ry = float(n[1]); rz = float(n[2])
+	elif n is Dictionary:
+		rx = float(n.get("x", 0)); ry = float(n.get("y", 0)); rz = float(n.get("z", 0))
+	# ROS (x=fwd, y=left, z=up) -> Godot (x=-y, y=z, z=-x)
+	return Vector3(-ry, rz, -rx)
 
 func _triangulate_fan(pts: PackedVector3Array, verts: PackedVector3Array, idx: PackedInt32Array):
 	if pts.size() < 3: return

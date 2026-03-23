@@ -4,6 +4,9 @@ extends Node
 
 var car: VehicleBody3D
 var lanelet_map: Node  # lanelet_map.gd instance — set by main.gd
+var traffic_light_manager: Node3D  # traffic_light_manager.gd instance — set by main.gd
+var trajectory_mesh: MeshInstance3D  # trajectory_mesh.gd instance — set by main.gd
+var dynamic_object_mesh: MeshInstance3D  # dynamic_object_mesh.gd instance — set by main.gd
 
 @export var rosbridge_url: String = "ws://localhost:9090"
 @export var publish_rate_hz: float = 30.0
@@ -18,7 +21,7 @@ var viewer_offset_valid: bool = false
 ## Sensor output delays [s]. Each topic's data is buffered and published
 ## after the specified delay to simulate real sensor latency.
 @export_group("Control Mapping")
-@export var full_brake_decel: float = 0.4  ## Deceleration [m/s²] that maps to cmd_brake=1.0
+@export var full_brake_decel: float = 0.9  ## Deceleration [m/s²] that maps to cmd_brake=1.0
 
 @export_group("Sensor Delay")
 @export var odom_delay: float = 0.0       ## /localization/kinematic_state
@@ -206,6 +209,12 @@ func _setup_topics():
 	_subscribe("/initialpose3d", "geometry_msgs/msg/PoseWithCovarianceStamped")
 	_subscribe("/vehicle/engage", "autoware_vehicle_msgs/msg/Engage")
 	_subscribe("/tf_static", "tf2_msgs/msg/TFMessage")
+	_subscribe("/perception/traffic_light_recognition/traffic_signals",
+		"autoware_perception_msgs/msg/TrafficLightGroupArray")
+	_subscribe("/planning/trajectory",
+		"autoware_planning_msgs/msg/Trajectory")
+	_subscribe("/perception/object_recognition/objects",
+		"autoware_perception_msgs/msg/PredictedObjects")
 
 	# Advertise control_mode_request service
 	_send_json({
@@ -281,6 +290,15 @@ func _handle_topic_msg(topic: String, msg: Dictionary):
 		"/tf_static":
 			_handle_incoming_tf(msg)
 
+		"/perception/traffic_light_recognition/traffic_signals":
+			_handle_traffic_light_recognition(msg)
+
+		"/planning/trajectory":
+			_handle_trajectory(msg)
+
+		"/perception/object_recognition/objects":
+			_handle_dynamic_objects(msg)
+
 func _handle_incoming_tf(msg: Dictionary):
 	var transforms = msg.get("transforms", [])
 	for tf in transforms:
@@ -309,6 +327,131 @@ func godot_to_ros_map(godot_pos: Vector3) -> Dictionary:
 	var ros_y = -godot_pos.x + viewer_offset_y
 	var ros_z = godot_pos.y + viewer_offset_z
 	return {"x": ros_x, "y": ros_y, "z": ros_z}
+
+func _handle_dynamic_objects(msg: Dictionary):
+	if not dynamic_object_mesh or not is_instance_valid(dynamic_object_mesh):
+		return
+	if not viewer_offset_valid:
+		return
+	var objects_raw = msg.get("objects", [])
+	if typeof(objects_raw) != TYPE_ARRAY:
+		return
+	var objects: Array = []
+	for obj in objects_raw:
+		if typeof(obj) != TYPE_DICTIONARY:
+			continue
+		var kin = obj.get("kinematics", {})
+		var pose = kin.get("initial_pose_with_covariance", {}).get("pose", {})
+		var p = pose.get("position", {})
+		var q = pose.get("orientation", {})
+		var godot_pos = ros_map_to_godot(
+			float(p.get("x", 0)), float(p.get("y", 0)), float(p.get("z", 0)))
+		var rqx = float(q.get("x", 0))
+		var rqy = float(q.get("y", 0))
+		var rqz = float(q.get("z", 0))
+		var rqw = float(q.get("w", 1))
+		var godot_quat = Quaternion(-rqy, rqz, -rqx, rqw)
+
+		var shape = obj.get("shape", {})
+		var shape_type = int(shape.get("type", 0))
+		var dims_raw = shape.get("dimensions", {})
+		var dims = Vector3(
+			float(dims_raw.get("x", 1)), float(dims_raw.get("y", 1)), float(dims_raw.get("z", 1)))
+
+		var footprint: Array = []
+		if shape_type == 2:  # POLYGON
+			var fp = shape.get("footprint", {}).get("points", [])
+			if typeof(fp) == TYPE_ARRAY:
+				for pt in fp:
+					footprint.append(Vector2(float(pt.get("x", 0)), float(pt.get("y", 0))))
+
+		objects.append({
+			"position": godot_pos,
+			"quaternion": godot_quat,
+			"shape_type": shape_type,
+			"dimensions": dims,
+			"footprint": footprint,
+		})
+	dynamic_object_mesh.set_objects(objects)
+
+func _handle_trajectory(msg: Dictionary):
+	if not trajectory_mesh or not is_instance_valid(trajectory_mesh):
+		return
+	if not viewer_offset_valid:
+		return
+	var pts_raw = msg.get("points", [])
+	if typeof(pts_raw) != TYPE_ARRAY or pts_raw.is_empty():
+		return
+	var points: Array = []
+	for pt in pts_raw:
+		if typeof(pt) != TYPE_DICTIONARY:
+			continue
+		var pose = pt.get("pose", {})
+		var p = pose.get("position", {})
+		var q = pose.get("orientation", {})
+		var godot_pos = ros_map_to_godot(
+			float(p.get("x", 0)), float(p.get("y", 0)), float(p.get("z", 0)))
+		# ROS quat (x,y,z,w) → Godot quat
+		var rqx = float(q.get("x", 0))
+		var rqy = float(q.get("y", 0))
+		var rqz = float(q.get("z", 0))
+		var rqw = float(q.get("w", 1))
+		var godot_quat = Quaternion(-rqy, rqz, -rqx, rqw)
+		points.append({
+			"pos": godot_pos,
+			"quat": godot_quat,
+			"vel": float(pt.get("longitudinal_velocity_mps", 0)),
+		})
+	trajectory_mesh.set_trajectory(points)
+
+func _handle_traffic_light_recognition(msg: Dictionary):
+	if not traffic_light_manager or not is_instance_valid(traffic_light_manager):
+		return
+	# autoware_perception_msgs/msg/TrafficLightGroupArray
+	# .traffic_light_groups[] = { traffic_light_group_id, elements[] }
+	var groups = msg.get("traffic_light_groups", [])
+	if typeof(groups) != TYPE_ARRAY or groups.is_empty():
+		return
+	var status_list: Array = []
+	for g in groups:
+		if typeof(g) != TYPE_DICTIONARY:
+			continue
+		var gid = int(g.get("traffic_light_group_id", -1))
+		var elements_raw = g.get("elements", [])
+		if typeof(elements_raw) != TYPE_ARRAY:
+			continue
+		var elements: Array = []
+		for e in elements_raw:
+			if typeof(e) != TYPE_DICTIONARY:
+				continue
+			# Map Autoware enum values to string names
+			var color_val = int(e.get("color", 0))
+			var shape_val = int(e.get("shape", 0))
+			var color_str = _traffic_color_to_string(color_val)
+			var arrow_str = _traffic_shape_to_arrow(shape_val)
+			elements.append({"color": color_str, "arrow": arrow_str})
+		status_list.append({"group_id": gid, "status_elements": elements})
+	traffic_light_manager.update_recognition(status_list)
+
+func _traffic_color_to_string(val: int) -> String:
+	# autoware_perception_msgs/msg/TrafficLightElement color constants
+	match val:
+		1: return "red"
+		2: return "yellow"      # AMBER
+		3: return "green"
+		4: return "white"
+		_: return "none"        # UNKNOWN=0
+
+func _traffic_shape_to_arrow(val: int) -> String:
+	# autoware_perception_msgs/msg/TrafficLightElement shape constants
+	match val:
+		1: return "none"        # CIRCLE
+		2: return "left"        # LEFT_ARROW
+		3: return "right"       # RIGHT_ARROW
+		4: return "up"          # UP_ARROW
+		5: return "down"        # DOWN_ARROW
+		6: return "none"        # CROSS
+		_: return "none"        # UNKNOWN=0
 
 func _handle_service_response(data: Dictionary):
 	var id = data.get("id", "")

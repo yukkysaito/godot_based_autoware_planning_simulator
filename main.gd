@@ -14,6 +14,9 @@ var control_telemetry: Control
 var ros_bridge: Node
 var trail: MeshInstance3D
 var lanelet_map: Node3D
+var traffic_light_manager: Node3D
+var trajectory_mesh: MeshInstance3D
+var dynamic_object_mesh: MeshInstance3D
 
 @export var spawn_position: Vector3 = Vector3(0, 0, 0)
 @export var spawn_height_offset: float = 2.0
@@ -30,6 +33,9 @@ func _ready():
 	_setup_trail()
 	_setup_camera()
 	_setup_ros_bridge()
+	_setup_traffic_light_manager()
+	_setup_trajectory_mesh()
+	_setup_dynamic_object_mesh()
 	_setup_lanelet_map()  # after ros_bridge so viewer offset is available
 	_setup_hud()
 
@@ -38,16 +44,17 @@ func _setup_environment():
 	env.background_mode = Environment.BG_SKY
 	var sky = Sky.new()
 	var sky_mat = ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.35, 0.55, 0.85)
-	sky_mat.sky_horizon_color = Color(0.65, 0.75, 0.85)
-	sky_mat.ground_bottom_color = Color(0.2, 0.17, 0.13)
-	sky_mat.ground_horizon_color = Color(0.65, 0.75, 0.85)
+	sky_mat.sky_top_color = Color(0, 0, 0, 1)
+	sky_mat.sky_horizon_color = Color(0.119363, 0.466633, 0.961925, 1)
+	sky_mat.sky_curve = 0.00437356
+	sky_mat.ground_bottom_color = Color(0.207843, 0.223529, 0.294118, 1)
+	sky_mat.ground_horizon_color = Color(0.119363, 0.466633, 0.961925, 1)
+	sky_mat.ground_curve = 0.00233258
 	sky.sky_material = sky_mat
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.5
-	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.ssao_enabled = true
+	env.glow_enabled = true
+	env.glow_intensity = 8.0
 	var world_env = WorldEnvironment.new()
 	world_env.environment = env
 	add_child(world_env)
@@ -56,8 +63,6 @@ func _setup_lighting():
 	var light = DirectionalLight3D.new()
 	light.rotation_degrees = Vector3(-50, -30, 0)
 	light.light_energy = 1.2
-	light.shadow_enabled = true
-	light.directional_shadow_max_distance = 200.0
 	add_child(light)
 
 func _create_default_ground():
@@ -71,7 +76,8 @@ func _create_default_ground():
 	plane.size = Vector2(ground_size, ground_size)
 	mi.mesh = plane
 	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(0.25, 0.25, 0.27)
+	mat.albedo_color = Color(0, 0.0745098, 0.137255, 1)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mi.material_override = mat
 	add_child(mi)
 
@@ -140,10 +146,32 @@ func _create_default_ground():
 	body.physics_material_override = phys_mat
 	add_child(body)
 
+func _setup_traffic_light_manager():
+	traffic_light_manager = Node3D.new()
+	traffic_light_manager.set_script(load("res://traffic_light_manager.gd"))
+	traffic_light_manager.ros_bridge = ros_bridge
+	ros_bridge.traffic_light_manager = traffic_light_manager
+	add_child(traffic_light_manager)
+
+func _setup_trajectory_mesh():
+	trajectory_mesh = MeshInstance3D.new()
+	trajectory_mesh.set_script(load("res://trajectory_mesh.gd"))
+	trajectory_mesh.ros_bridge = ros_bridge
+	ros_bridge.trajectory_mesh = trajectory_mesh
+	add_child(trajectory_mesh)
+
+func _setup_dynamic_object_mesh():
+	dynamic_object_mesh = MeshInstance3D.new()
+	dynamic_object_mesh.set_script(load("res://dynamic_object_mesh.gd"))
+	dynamic_object_mesh.ros_bridge = ros_bridge
+	ros_bridge.dynamic_object_mesh = dynamic_object_mesh
+	add_child(dynamic_object_mesh)
+
 func _setup_lanelet_map():
 	lanelet_map = Node3D.new()
 	lanelet_map.set_script(load("res://lanelet_map.gd"))
 	lanelet_map.ros_bridge = ros_bridge
+	lanelet_map.traffic_light_manager = traffic_light_manager
 	ros_bridge.lanelet_map = lanelet_map  # set reference now that both exist
 	lanelet_map.map_loaded.connect(_on_map_loaded)
 	add_child(lanelet_map)
