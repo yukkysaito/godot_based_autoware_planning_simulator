@@ -19,7 +19,7 @@ A Godot 4-based vehicle dynamics simulator designed as a replacement for Autowar
 
 ## Requirements
 
-- [Godot Engine 4.3+](https://godotengine.org/) (tested with 4.7 dev)
+- [Godot Engine 4.2+](https://godotengine.org/) (tested with [4.2.1-stable](https://github.com/godotengine/godot/tree/b09f793f564a6c95dc76acc654b390e68441bd01))
 - [rosbridge_suite](https://github.com/RobotWebTools/rosbridge_suite) (ROS 2)
 - [Autoware](https://github.com/autowarefoundation/autoware) (for lanelet2 maps and control commands)
 - Python 3 with `lanelet2` package (for the bridge node)
