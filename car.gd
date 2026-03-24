@@ -31,7 +31,7 @@ enum Gear { PARK, REVERSE, NEUTRAL, DRIVE }
 
 @export_group("Powertrain")
 @export var max_engine_force: float = 10000.0
-@export var max_brake_force: float = 100.0
+@export var max_brake_force: float = 70.0
 @export var max_steer_angle: float = 0.61
 @export var reverse_power_ratio: float = 0.3
 @export var steer_speed_threshold: float = 30.0
@@ -47,10 +47,7 @@ enum Gear { PARK, REVERSE, NEUTRAL, DRIVE }
 @export var engine_braking_force: float = 20.0
 
 @export_group("Tire Model")
-@export var front_cornering_stiffness: float = 80000.0  ## [N/rad] per axle
-@export var rear_cornering_stiffness: float = 120000.0  ## [N/rad] per axle (higher = more stable rear)
-@export var max_tire_force_ratio: float = 1.2            ## Max lateral force / normal force
-@export var cg_to_front_ratio: float = 0.45              ## CG position (0=front, 1=rear)
+@export var understeer_gradient: float = 0.05            ## Understeer gradient [rad/(m/s²)]. Higher = more understeer at speed
 
 @export_group("Suspension")
 @export var suspension_rest_length_val: float = 0.4
@@ -139,7 +136,6 @@ func _physics_process(delta):
 	# Common path: apply transport delay then set vehicle controls
 	_apply_delayed_controls(delta)
 	_apply_resistance_forces()
-	_stabilize_lateral()
 	_update_lamps()
 	_record_good_position(delta)
 	_check_auto_respawn(delta)
@@ -427,44 +423,47 @@ func _apply_delayed_controls(delta):
 	# Apply to VehicleBody3D
 	var sr = clampf(1.0 - (get_speed_kmh() - steer_speed_threshold) / 100.0,
 					steer_high_speed_ratio, 1.0)
-	steering = _current_steering * max_steer_angle * sr
+	var raw_steer = _current_steering * max_steer_angle * sr
+	# Understeer gradient: δ_eff = δ / (1 + K_us * v² / L)
+	# Models speed-dependent steering loss from tire/suspension compliance.
+	var spd = absf(get_forward_speed())
+	var us_factor = 1.0 / (1.0 + understeer_gradient * spd * spd / wheel_base)
+	steering = raw_steer * us_factor
 	brake = _current_brake_val * max_brake_force
-	engine_force = -_current_throttle * max_engine_force
+	# Apply driving force directly to rigid body (bypasses VehicleBody3D tire
+	# transmission losses so that F=ma maps accurately to actual acceleration).
+	engine_force = 0.0
+	var forward = -global_transform.basis.z
+	var drive_force = _current_throttle * max_engine_force * 2.0  # 2 traction wheels
+	apply_central_force(forward * drive_force)
 
 	# Creep in D/R when idle
-	if absf(_current_throttle) < 0.05 and _current_brake_val < 0.05:
-		var spd = absf(get_forward_speed()) * 3.6
-		if spd < creep_max_speed:
-			var r = 1.0 - spd / creep_max_speed
+	if _current_throttle < 0.05 and _current_brake_val < 0.05:
+		var creep_spd = absf(get_forward_speed()) * 3.6
+		if creep_spd < creep_max_speed:
+			var r = 1.0 - creep_spd / creep_max_speed
+			var creep = creep_force * r
 			match current_gear:
-				Gear.DRIVE:   engine_force = -creep_force * r
-				Gear.REVERSE: engine_force = creep_force * r
-
-# ==========================================================================
-# Lateral stabilization (simple bicycle model correction)
-# ==========================================================================
-
-func _stabilize_lateral():
-	## Simple lateral force to counter VehicleBody3D's tire model drift.
-	## Does NOT modify velocity directly — only applies corrective force.
-	if not has_ground_contact():
-		return
-	var right = global_transform.basis.x
-	var vy = linear_velocity.dot(right)
-	# Oppose lateral velocity with force proportional to mass
-	apply_central_force(-right * vy * mass * 5.0)
+				Gear.DRIVE:   apply_central_force(forward * creep)
+				Gear.REVERSE: apply_central_force(-forward * creep)
 
 # ==========================================================================
 # Resistance forces
 # ==========================================================================
+
+## Returns the current resistance force [N] at the given speed.
+## Used by both the physics step and ros_bridge for throttle feedforward.
+func get_resistance_force(speed: float) -> float:
+	var f = rolling_resistance_coeff * mass * 9.81
+	f += 0.5 * air_density * drag_coefficient * frontal_area * speed * speed
+	return f
 
 func _apply_resistance_forces():
 	var speed = linear_velocity.length()
 	if speed < 0.05:
 		return
 	var dir = linear_velocity / speed
-	var f = rolling_resistance_coeff * mass * 9.81
-	f += 0.5 * air_density * drag_coefficient * frontal_area * speed * speed
+	var f = get_resistance_force(speed)
 	if absf(_current_throttle) < 0.05 and current_gear != Gear.NEUTRAL:
 		f += engine_braking_force * clampf(speed / 10.0, 0.1, 1.0)
 	apply_central_force(-dir * f)

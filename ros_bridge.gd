@@ -21,7 +21,7 @@ var viewer_offset_valid: bool = false
 ## Sensor output delays [s]. Each topic's data is buffered and published
 ## after the specified delay to simulate real sensor latency.
 @export_group("Control Mapping")
-@export var full_brake_decel: float = 0.9  ## Deceleration [m/s²] that maps to cmd_brake=1.0
+@export var full_brake_decel: float = 1.5  ## Deceleration [m/s²] that maps to cmd_brake=1.0
 
 @export_group("Sensor Delay")
 @export var odom_delay: float = 0.0       ## /localization/kinematic_state
@@ -153,8 +153,9 @@ func _apply_autoware_control():
 	if car.current_gear == car.Gear.REVERSE:
 		accel = -accel
 	if accel >= 0:
-		# Map acceleration to throttle: F=ma, throttle=F/max_engine_force
-		var force_needed = car.mass * accel / 2.0  # per traction wheel
+		# Map acceleration to throttle: F=ma + resistance feedforward
+		var speed = absf(car.get_forward_speed())
+		var force_needed = (car.mass * accel + car.get_resistance_force(speed)) / 2.0  # per traction wheel
 		car.cmd_throttle = clampf(force_needed / car.max_engine_force, 0.0, 1.0)
 		car.cmd_brake = 0.0
 	else:

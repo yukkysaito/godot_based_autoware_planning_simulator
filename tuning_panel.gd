@@ -60,6 +60,8 @@ const PARAMS = [
 	{"name": "Damping Compression", "prop": "damping_compression_val", "min": 0.5, "max": 10.0, "step": 0.1, "target": "car"},
 	{"name": "Damping Relaxation", "prop": "damping_relaxation_val", "min": 0.5, "max": 10.0, "step": 0.1, "target": "car"},
 	{"name": "Wheel Friction Slip", "prop": "wheel_friction_slip", "min": 0.5, "max": 10.0, "step": 0.1, "target": "car"},
+	{"group": "Lateral Dynamics"},
+	{"name": "Understeer Gradient", "prop": "understeer_gradient", "min": 0.0, "max": 0.2, "step": 0.005, "target": "car"},
 ]
 
 func _ready():
