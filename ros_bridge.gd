@@ -153,10 +153,11 @@ func _apply_autoware_control():
 	if car.current_gear == car.Gear.REVERSE:
 		accel = -accel
 	if accel >= 0:
-		# Map acceleration to throttle: F=ma + resistance feedforward
+		# Map acceleration to throttle: (F=ma + resistance) / drivetrain_efficiency
 		var speed = absf(car.get_forward_speed())
 		var force_needed = (car.mass * accel + car.get_resistance_force(speed)) / 2.0  # per traction wheel
-		car.cmd_throttle = clampf(force_needed / car.max_engine_force, 0.0, 1.0)
+		var eff = maxf(car.drivetrain_efficiency, 0.1)
+		car.cmd_throttle = clampf(force_needed / (car.max_engine_force * eff), 0.0, 1.0)
 		car.cmd_brake = 0.0
 	else:
 		car.cmd_throttle = 0.0

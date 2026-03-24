@@ -41,13 +41,14 @@ enum Gear { PARK, REVERSE, NEUTRAL, DRIVE }
 
 @export_group("Resistance")
 @export var rolling_resistance_coeff: float = 0.003
-@export var drag_coefficient: float = 0.65
+@export var drag_coefficient: float = 0.45
 @export var frontal_area: float = 5.4
 @export var air_density: float = 1.225
 @export var engine_braking_force: float = 20.0
 
 @export_group("Tire Model")
-@export var understeer_gradient: float = 0.05            ## Understeer gradient [rad/(m/s²)]. Higher = more understeer at speed
+@export var understeer_gradient: float = 0.03            ## Understeer gradient [rad/(m/s²)]. Higher = more understeer at speed
+@export var drivetrain_efficiency: float = 0.7           ## Compensates for VehicleBody3D tire model transmission losses
 
 @export_group("Suspension")
 @export var suspension_rest_length_val: float = 0.4
@@ -430,22 +431,16 @@ func _apply_delayed_controls(delta):
 	var us_factor = 1.0 / (1.0 + understeer_gradient * spd * spd / wheel_base)
 	steering = raw_steer * us_factor
 	brake = _current_brake_val * max_brake_force
-	# Apply driving force directly to rigid body (bypasses VehicleBody3D tire
-	# transmission losses so that F=ma maps accurately to actual acceleration).
-	engine_force = 0.0
-	var forward = -global_transform.basis.z
-	var drive_force = _current_throttle * max_engine_force * 2.0  # 2 traction wheels
-	apply_central_force(forward * drive_force)
+	engine_force = -_current_throttle * max_engine_force
 
 	# Creep in D/R when idle
-	if _current_throttle < 0.05 and _current_brake_val < 0.05:
+	if absf(_current_throttle) < 0.05 and _current_brake_val < 0.05:
 		var creep_spd = absf(get_forward_speed()) * 3.6
 		if creep_spd < creep_max_speed:
 			var r = 1.0 - creep_spd / creep_max_speed
-			var creep = creep_force * r
 			match current_gear:
-				Gear.DRIVE:   apply_central_force(forward * creep)
-				Gear.REVERSE: apply_central_force(-forward * creep)
+				Gear.DRIVE:   engine_force = -creep_force * r
+				Gear.REVERSE: engine_force = creep_force * r
 
 # ==========================================================================
 # Resistance forces

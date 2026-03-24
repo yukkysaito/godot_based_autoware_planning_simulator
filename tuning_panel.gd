@@ -62,6 +62,7 @@ const PARAMS = [
 	{"name": "Wheel Friction Slip", "prop": "wheel_friction_slip", "min": 0.5, "max": 10.0, "step": 0.1, "target": "car"},
 	{"group": "Lateral Dynamics"},
 	{"name": "Understeer Gradient", "prop": "understeer_gradient", "min": 0.0, "max": 0.2, "step": 0.005, "target": "car"},
+	{"name": "Drivetrain Efficiency", "prop": "drivetrain_efficiency", "min": 0.1, "max": 1.0, "step": 0.05, "target": "car"},
 ]
 
 func _ready():
