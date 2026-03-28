@@ -455,8 +455,11 @@ func _on_car_rebuild_requested():
 	var pos = car.global_position
 	var rot_y = car.global_rotation.y
 
+	var prev_params_path = car.loaded_params_path
 	car.queue_free()
 	car = CarScene.instantiate()
+	car.skip_auto_load = true
+	car.loaded_params_path = prev_params_path
 
 	for prop in params:
 		car.set(prop, params[prop])

@@ -5,6 +5,9 @@ extends PanelContainer
 var car: VehicleBody3D
 var ros_bridge: Node  # ros_bridge.gd instance
 var _sliders: Dictionary = {}
+var _path_label: Label
+var _export_dialog: FileDialog
+var _import_dialog: FileDialog
 
 signal car_rebuild_requested
 
@@ -137,14 +140,39 @@ func _build_ui():
 		slider.value_changed.connect(_on_slider_changed.bind(prop))
 
 	vbox.add_child(HSeparator.new())
+
+	_path_label = Label.new()
+	_path_label.add_theme_font_size_override("font_size", 11)
+	_path_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.4))
+	_path_label.text = ""
+	vbox.add_child(_path_label)
+
+	var btn_row = HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(btn_row)
+
 	var btn = Button.new()
 	btn.text = "Reset Defaults"
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btn.pressed.connect(_reset_defaults)
-	vbox.add_child(btn)
+	btn_row.add_child(btn)
+
+	var import_btn = Button.new()
+	import_btn.text = "Import JSON"
+	import_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	import_btn.pressed.connect(_import_params)
+	btn_row.add_child(import_btn)
+
+	var export_btn = Button.new()
+	export_btn.text = "Export JSON"
+	export_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	export_btn.pressed.connect(_export_params)
+	btn_row.add_child(export_btn)
 
 func set_car(new_car: VehicleBody3D):
 	car = new_car
 	_sync_all()
+	_update_path_label()
 
 func set_ros_bridge(bridge: Node):
 	ros_bridge = bridge
@@ -187,13 +215,17 @@ func _fmt(prop: String, value: float):
 func _reset_defaults():
 	if not car:
 		return
-	var fresh = preload("res://car.tscn").instantiate()
-	for prop in _sliders:
-		if _sliders[prop]["target"] == "car":
-			var val = fresh.get(prop)
-			if val != null:
-				car.set(prop, val)
-	fresh.queue_free()
+	# Reload from the currently loaded JSON (or code defaults if none)
+	if not car.loaded_params_path.is_empty():
+		car.load_params_from_json(car.loaded_params_path)
+	else:
+		var fresh = preload("res://car.tscn").instantiate()
+		for prop in _sliders:
+			if _sliders[prop]["target"] == "car":
+				var val = fresh.get(prop)
+				if val != null:
+					car.set(prop, val)
+		fresh.queue_free()
 	# Reset sensor delays to 0
 	if ros_bridge and is_instance_valid(ros_bridge):
 		for prop in _sliders:
@@ -201,3 +233,56 @@ func _reset_defaults():
 				ros_bridge.set(prop, 0.0)
 	car_rebuild_requested.emit()
 	_sync_all()
+
+func _update_path_label():
+	if _path_label and car:
+		var p = car.loaded_params_path
+		_path_label.text = p if not p.is_empty() else "(defaults)"
+
+func _import_params():
+	if not car:
+		return
+	if not _import_dialog:
+		_import_dialog = FileDialog.new()
+		_import_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+		_import_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		_import_dialog.add_filter("*.json ; JSON files")
+		_import_dialog.file_selected.connect(_on_import_path_selected)
+		add_child(_import_dialog)
+	var default_path = car.loaded_params_path
+	if default_path.is_empty() or default_path.begins_with("res://"):
+		default_path = OS.get_executable_path().get_base_dir()
+	_import_dialog.current_path = default_path
+	_import_dialog.popup_centered(Vector2i(600, 400))
+
+func _on_import_path_selected(path: String):
+	if not car:
+		return
+	if car.load_params_from_json(path):
+		car.apply_vehicle_params()
+		car_rebuild_requested.emit()
+		_sync_all()
+		_update_path_label()
+
+func _export_params():
+	if not car:
+		return
+	if not _export_dialog:
+		_export_dialog = FileDialog.new()
+		_export_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+		_export_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		_export_dialog.add_filter("*.json ; JSON files")
+		_export_dialog.file_selected.connect(_on_export_path_selected)
+		add_child(_export_dialog)
+	var default_path = car.loaded_params_path
+	if default_path.is_empty() or default_path.begins_with("res://"):
+		default_path = OS.get_executable_path().get_base_dir().path_join(car.params_json_name)
+	_export_dialog.current_path = default_path
+	_export_dialog.popup_centered(Vector2i(600, 400))
+
+func _on_export_path_selected(path: String):
+	if not car:
+		return
+	if car.save_params_to_json(path):
+		car.loaded_params_path = path
+		_update_path_label()

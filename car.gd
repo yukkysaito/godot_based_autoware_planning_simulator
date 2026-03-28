@@ -68,6 +68,9 @@ enum Gear { PARK, REVERSE, NEUTRAL, DRIVE }
 @export var respawn_below_y: float = -100.0
 @export var flip_respawn_time: float = 3.0
 
+@export_group("Config")
+@export var params_json_name: String = "vehicle_params.json"
+
 # ==========================================================================
 # Runtime state
 # ==========================================================================
@@ -109,6 +112,9 @@ var _turn_lamp_fr: MeshInstance3D
 var _turn_lamp_rl: MeshInstance3D
 var _turn_lamp_rr: MeshInstance3D
 
+var loaded_params_path: String = ""  ## Path the params were loaded from
+var skip_auto_load: bool = false     ## Set true before add_child to skip JSON load in _ready
+
 signal respawned
 signal gear_changed(gear: Gear)
 
@@ -121,7 +127,89 @@ const GEAR_NAMES = {
 # Lifecycle
 # ==========================================================================
 
+## Property names that are saveable/loadable vehicle parameters.
+const PARAM_PROPS: Array[String] = [
+	"wheel_base", "rear_overhang", "front_overhang", "tread",
+	"vehicle_weight", "wheel_radius_param", "body_height", "body_width_margin",
+	"accel_response_delay", "brake_response_delay", "steering_response_delay",
+	"accel_time_constant", "brake_time_constant", "steering_time_constant",
+	"max_engine_force", "max_brake_force", "max_steer_angle",
+	"reverse_power_ratio", "steer_speed_threshold", "steer_high_speed_ratio",
+	"creep_force", "creep_max_speed",
+	"rolling_resistance_coeff", "drag_coefficient", "frontal_area",
+	"air_density", "engine_braking_force",
+	"understeer_gradient", "drivetrain_efficiency",
+	"suspension_rest_length_val", "suspension_stiffness_val", "suspension_travel_val",
+	"suspension_max_force_val", "damping_compression_val", "damping_relaxation_val",
+	"wheel_friction_slip",
+	"body_bounce", "body_friction", "center_of_mass_y",
+	"respawn_below_y", "flip_respawn_time",
+]
+
+func _resolve_params_path() -> String:
+	# 1. CLI argument: --vehicle-params <path>
+	var args = OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	for i in range(args.size() - 1):
+		if args[i] == "--vehicle-params":
+			var p = args[i + 1]
+			if FileAccess.file_exists(p):
+				return p
+			print("[Car] CLI params file not found: %s" % p)
+	# 2. Next to the executable
+	var exe_dir = OS.get_executable_path().get_base_dir()
+	var beside = exe_dir.path_join(params_json_name)
+	if FileAccess.file_exists(beside):
+		return beside
+	# 3. Embedded fallback
+	var res_path = "res://" + params_json_name
+	if FileAccess.file_exists(res_path):
+		return res_path
+	return ""
+
+func load_params_from_json(path: String = "") -> bool:
+	if path.is_empty():
+		path = _resolve_params_path()
+	if path.is_empty():
+		loaded_params_path = ""
+		print("[Car] No params file found, using defaults")
+		return false
+	var file = FileAccess.open(path, FileAccess.READ)
+	if not file:
+		print("[Car] Cannot open params file: %s" % path)
+		return false
+	var json = JSON.new()
+	if json.parse(file.get_as_text()) != OK or not json.data is Dictionary:
+		print("[Car] Failed to parse params file: %s" % path)
+		return false
+	var data: Dictionary = json.data
+	var count := 0
+	for key in data:
+		if key in self:
+			set(key, float(data[key]))
+			count += 1
+	loaded_params_path = path
+	print("[Car] Loaded %d params from %s" % [count, path])
+	return true
+
+func save_params_to_json(path: String = "") -> bool:
+	if path.is_empty():
+		var exe_dir = OS.get_executable_path().get_base_dir()
+		path = exe_dir.path_join(params_json_name)
+	var data := {}
+	for prop in PARAM_PROPS:
+		data[prop] = get(prop)
+	var text = JSON.stringify(data, "  ")
+	var file = FileAccess.open(path, FileAccess.WRITE)
+	if not file:
+		print("[Car] Cannot write params file: %s" % path)
+		return false
+	file.store_string(text + "\n")
+	print("[Car] Saved params to %s" % path)
+	return true
+
 func _ready():
+	if not skip_auto_load:
+		load_params_from_json()
 	apply_vehicle_params()
 	contact_monitor = true
 	max_contacts_reported = 4
