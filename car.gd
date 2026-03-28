@@ -47,7 +47,7 @@ enum Gear { PARK, REVERSE, NEUTRAL, DRIVE }
 @export var engine_braking_force: float = 20.0
 
 @export_group("Tire Model")
-@export var understeer_gradient: float = 0.03            ## Understeer gradient [rad/(m/s²)]. Higher = more understeer at speed
+@export var understeer_gradient: float = 0.07            ## Understeer gradient [rad/(m/s²)]. Higher = more understeer at speed
 @export var drivetrain_efficiency: float = 0.7           ## Compensates for VehicleBody3D tire model transmission losses
 
 @export_group("Suspension")
