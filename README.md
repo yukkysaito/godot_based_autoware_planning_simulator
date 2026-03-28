@@ -8,9 +8,10 @@ A Godot 4-based vehicle dynamics simulator designed as a replacement for Autowar
 
 - **Vehicle Physics**: VehicleBody3D-based simulation with configurable parameters (mass, wheelbase, suspension, tire grip, etc.)
 - **Autoware Integration**: Drop-in replacement for `simple_planning_simulator` — subscribes to control commands and publishes vehicle status via rosbridge
-- **Lanelet2 Map Rendering**: Dynamically loads lanelet2 maps from `/map/vector_map`, rendering road surfaces, intersection areas, road borders (walls), shoulder areas, and road markings
+- **Lanelet2 Map Rendering**: Dynamically loads lanelet2 maps from `/map/vector_map`, rendering road surfaces, intersection areas, hatched road markings, parking lots, road borders (walls), shoulder areas, and road markings
 - **Viewer Frame Support**: Uses `map → viewer` TF to avoid floating-point precision issues with large map coordinates
-- **In-Game Tuning Panel**: All vehicle parameters adjustable in real-time (Tab key)
+- **External Vehicle Params (JSON)**: Load/save vehicle parameters from external JSON files — editable without rebuilding
+- **In-Game Tuning Panel**: All vehicle parameters adjustable in real-time (Tab key) with Import/Export JSON support
 - **Telemetry Graphs**: Real-time lateral/longitudinal G-force, jerk, and control input visualization
 - **Gear System**: P/R/N/D with creep simulation
 - **Transport Delay + 1st Order Lag**: Configurable control response delays for realistic actuator simulation
@@ -31,6 +32,7 @@ driving_game/
 ├── project.godot              # Godot project config
 ├── main.tscn / main.gd       # Main scene and setup
 ├── car.tscn / car.gd         # Vehicle controller
+├── vehicle_params.json        # Default vehicle parameters (external JSON)
 ├── follow_camera.gd           # Orbit camera (RMB + drag)
 ├── ros_bridge.gd              # Autoware ↔ Godot WebSocket bridge
 ├── lanelet_map.gd             # Lanelet2 map mesh builder
@@ -81,6 +83,23 @@ python3 scripts/lanelet_bridge_node.py
 The bridge stays running and serves map data on demand. You do **not** need to restart it when restarting Godot.
 
 ### 3. Start Godot simulator
+
+**Using pre-built binary (recommended):**
+
+Download the latest release and extract:
+
+```bash
+tar xzf godot_autoware_simulator-v*.tar.gz
+./godot_autoware_simulator.x86_64
+```
+
+**Using a custom vehicle params file:**
+
+```bash
+./godot_autoware_simulator.x86_64 -- --vehicle-params /path/to/custom_params.json
+```
+
+**From source (Godot editor):**
 
 ```bash
 godot --path /path/to/driving_game
@@ -158,7 +177,25 @@ The `lanelet_bridge_node.py` subscribes to `/map/vector_map` (LaneletMapBin), de
 
 ## Vehicle Parameters
 
-All parameters are adjustable via the in-game tuning panel (Tab key):
+Vehicle parameters are stored in `vehicle_params.json`. On startup, the simulator loads parameters in the following priority:
+
+1. **CLI argument**: `--vehicle-params /path/to/file.json`
+2. **Next to the binary**: `vehicle_params.json` in the same directory as the executable
+3. **Embedded fallback**: Built-in default values inside the binary
+
+### Editing Parameters
+
+**Option A — Edit the JSON file directly:**
+
+Edit `vehicle_params.json` next to the binary and restart the simulator.
+
+**Option B — Use the in-game tuning panel (Tab key):**
+
+Adjust sliders in real-time, then click **Export JSON** to save to a file.
+Use **Import JSON** to load a different parameter file at runtime.
+**Reset Defaults** reloads values from the currently loaded JSON.
+
+### Parameter Categories
 
 - **Geometry**: Wheelbase, tread, overhang, wheel radius (requires car rebuild)
 - **Powertrain**: Engine force, brake force, steering angle, creep
@@ -167,6 +204,7 @@ All parameters are adjustable via the in-game tuning panel (Tab key):
 - **Sensor Delay**: Output delay for TF, odometry, velocity, steering, acceleration
 - **Resistance**: Rolling resistance, drag coefficient, frontal area
 - **Suspension**: Stiffness, travel, damping, max force, friction slip
+- **Lateral Dynamics**: Understeer gradient, drivetrain efficiency
 - **Vehicle**: Weight, center of mass
 
 ## Web Build (Browser)
