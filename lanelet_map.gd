@@ -28,6 +28,7 @@ var _retry_timer: float = 0.0
 var _fetch_timeout: float = 0.0
 
 signal map_loaded
+signal fetch_progress(current: int, total: int)
 
 func _process(delta):
 	if _built or not ros_bridge:
@@ -86,6 +87,7 @@ func handle_service_response(id: String, values: Dictionary):
 				_ingest_batch(json.data)
 		_fetched_batches += 1
 		print("[LaneletMap] Batch %d/%d fetched" % [_fetched_batches, _total_batches])
+		fetch_progress.emit(_fetched_batches, _total_batches)
 
 		if _fetched_batches < _total_batches:
 			_fetch_next_batch(false)

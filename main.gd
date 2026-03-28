@@ -174,10 +174,23 @@ func _setup_lanelet_map():
 	lanelet_map.traffic_light_manager = traffic_light_manager
 	ros_bridge.lanelet_map = lanelet_map  # set reference now that both exist
 	lanelet_map.map_loaded.connect(_on_map_loaded)
+	lanelet_map.fetch_progress.connect(_on_map_fetch_progress)
 	add_child(lanelet_map)
+
+func _on_map_fetch_progress(current: int, total: int):
+	if _map_progress_panel and not _map_progress_panel.visible:
+		_map_progress_panel.visible = true
+		_update_telemetry_position()
+	if _map_progress_bar:
+		_map_progress_bar.max_value = total
+		_map_progress_bar.value = current
+	if _map_progress_label:
+		_map_progress_label.text = "Loading map... %d/%d" % [current, total]
 
 func _on_map_loaded():
 	print("[Main] Map loaded — unfreezing car")
+	if _map_progress_panel:
+		_map_progress_panel.visible = false
 	if car and is_instance_valid(car):
 		car.freeze = false
 
@@ -224,6 +237,9 @@ var _dash_mode: Label
 var _dash_status: Label
 var _dash_lights: Label
 var _dash_panel: PanelContainer
+var _map_progress_bar: ProgressBar
+var _map_progress_label: Label
+var _map_progress_panel: PanelContainer
 
 func _setup_hud():
 	var hud = CanvasLayer.new()
@@ -311,6 +327,46 @@ func _setup_hud():
 	respawn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	respawn_label.visible = false
 	hud.add_child(respawn_label)
+
+	# --- Map loading progress bar (center) ---
+	_map_progress_panel = PanelContainer.new()
+	var prog_style = _make_panel_style(Color(0.08, 0.08, 0.1, 0.88), 8)
+	prog_style.content_margin_left = 16
+	prog_style.content_margin_right = 16
+	prog_style.content_margin_top = 10
+	prog_style.content_margin_bottom = 10
+	_map_progress_panel.add_theme_stylebox_override("panel", prog_style)
+	_map_progress_panel.visible = false
+	hud.add_child(_map_progress_panel)
+
+	var prog_vbox = VBoxContainer.new()
+	prog_vbox.add_theme_constant_override("separation", 6)
+	_map_progress_panel.add_child(prog_vbox)
+
+	_map_progress_label = Label.new()
+	_map_progress_label.text = "Loading map..."
+	_map_progress_label.add_theme_font_size_override("font_size", 14)
+	_map_progress_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.8))
+	_map_progress_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	prog_vbox.add_child(_map_progress_label)
+
+	_map_progress_bar = ProgressBar.new()
+	_map_progress_bar.custom_minimum_size = Vector2(300, 16)
+	_map_progress_bar.min_value = 0
+	_map_progress_bar.max_value = 100
+	_map_progress_bar.value = 0
+	_map_progress_bar.show_percentage = false
+	var bar_bg = StyleBoxFlat.new()
+	bar_bg.bg_color = Color(0.15, 0.15, 0.2, 1)
+	bar_bg.corner_radius_top_left = 4; bar_bg.corner_radius_top_right = 4
+	bar_bg.corner_radius_bottom_left = 4; bar_bg.corner_radius_bottom_right = 4
+	_map_progress_bar.add_theme_stylebox_override("background", bar_bg)
+	var bar_fill = StyleBoxFlat.new()
+	bar_fill.bg_color = Color(0.3, 0.7, 1.0, 1)
+	bar_fill.corner_radius_top_left = 4; bar_fill.corner_radius_top_right = 4
+	bar_fill.corner_radius_bottom_left = 4; bar_fill.corner_radius_bottom_right = 4
+	_map_progress_bar.add_theme_stylebox_override("fill", bar_fill)
+	prog_vbox.add_child(_map_progress_bar)
 
 	# Keep old reference for compatibility
 	speed_label = _dash_speed
@@ -463,6 +519,11 @@ func _update_telemetry_position():
 	info_label.position = Vector2(20, vp.y - 30)
 	# Center-top notification
 	respawn_label.position = Vector2(vp.x / 2 - 100, 60)
+	# Center map loading progress bar
+	if _map_progress_panel:
+		_map_progress_panel.position = Vector2(
+			(vp.x - _map_progress_panel.size.x) / 2,
+			(vp.y - _map_progress_panel.size.y) / 2)
 
 func _make_panel_style(bg_color: Color, radius: int) -> StyleBoxFlat:
 	var s = StyleBoxFlat.new()
