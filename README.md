@@ -46,7 +46,23 @@ driving_game/
 
 ## Quick Start
 
-### 1. Start Autoware (with planning simulator disabled)
+### 1. Download and extract
+
+Download the latest release from [Releases](https://github.com/yukkysaito/godot_based_autoware_planning_simulator/releases):
+
+```bash
+tar xzf godot_autoware_simulator-v*.tar.gz
+```
+
+This extracts the following files:
+
+```
+godot_autoware_simulator.x86_64   # Simulator binary
+vehicle_params.json                # Vehicle parameters (editable)
+scripts/lanelet_bridge_node.py     # ROS 2 lanelet2 bridge
+```
+
+### 2. Start Autoware (with planning simulator disabled)
 
 Before launching Autoware, comment out the existing `simple_planning_simulator` in your simulator launch file.
 In [`tier4_simulator_launch/launch/simulator.launch.xml`](https://github.com/autowarefoundation/autoware_launch/blob/main/tier4_universe_launch/tier4_simulator_launch/launch/simulator.launch.xml#L273-L279), comment out:
@@ -70,30 +86,28 @@ If it is not running, start it manually:
 ros2 launch rosbridge_server rosbridge_websocket_launch.xml max_message_size:=50000000
 ```
 
-### 2. Start lanelet bridge
+### 3. Start lanelet bridge
 
 This node converts the lanelet2 binary map to geometry data for Godot.
 It needs to be started in an environment where Autoware packages are sourced.
+The bridge and the simulator can be started in any order.
 
 ```bash
 source /path/to/autoware/install/setup.bash
 python3 scripts/lanelet_bridge_node.py
 ```
 
-The bridge stays running and serves map data on demand. You do **not** need to restart it when restarting Godot.
+The bridge stays running and serves map data on demand. You do **not** need to restart it when restarting the simulator.
 
-### 3. Start Godot simulator
-
-**Using pre-built binary (recommended):**
-
-Download the latest release and extract:
+### 4. Start the simulator
 
 ```bash
-tar xzf godot_autoware_simulator-v*.tar.gz
 ./godot_autoware_simulator.x86_64
 ```
 
-**Using a custom vehicle params file:**
+The simulator automatically connects to rosbridge (`ws://localhost:9090`) and requests the lanelet map.
+
+**With a custom vehicle params file:**
 
 ```bash
 ./godot_autoware_simulator.x86_64 -- --vehicle-params /path/to/custom_params.json
@@ -106,7 +120,6 @@ godot --path /path/to/driving_game
 ```
 
 Or open the project in the Godot editor and press F5.
-The simulator will automatically connect to rosbridge (ws://localhost:9090) and request the lanelet map.
 
 ### 4. Set initial pose
 
