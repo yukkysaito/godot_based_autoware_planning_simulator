@@ -230,9 +230,9 @@ func _setup_hud():
 	hud.name = "HUD"
 	add_child(hud)
 
-	# --- Dashboard panel (top-left) ---
+	# --- Dashboard panel (top-center) ---
 	_dash_panel = PanelContainer.new()
-	_dash_panel.position = Vector2(20, 16)
+	_dash_panel.position = Vector2(20, 16)  # updated dynamically in _update_telemetry_position
 	var dash_style = _make_panel_style(Color(0.08, 0.08, 0.1, 0.88), 10)
 	dash_style.content_margin_left = 20
 	dash_style.content_margin_right = 20
@@ -365,13 +365,13 @@ func _process(delta):
 		_dash_speed.add_theme_color_override("font_color", Color.WHITE)
 
 	if car.hazard_lights:
-		_dash_lights.text = "<< HAZARD >>"
+		_dash_lights.text = "◀ ▶"
 		_dash_lights.add_theme_color_override("font_color", Color(1.0, 0.6, 0.1))
 	elif car.current_turn_signal == car.TurnSignal.LEFT:
-		_dash_lights.text = "<< LEFT"
+		_dash_lights.text = "◀"
 		_dash_lights.add_theme_color_override("font_color", Color(0.2, 1.0, 0.4))
 	elif car.current_turn_signal == car.TurnSignal.RIGHT:
-		_dash_lights.text = "RIGHT >>"
+		_dash_lights.text = "▶"
 		_dash_lights.add_theme_color_override("font_color", Color(0.2, 1.0, 0.4))
 	else:
 		_dash_lights.text = ""
@@ -457,10 +457,12 @@ func _update_telemetry_position():
 	telemetry.position = Vector2(vp.x - telemetry.size.x - 10, vp.y - telemetry.size.y - 10)
 	control_telemetry.position = Vector2(vp.x - control_telemetry.size.x - 10,
 		telemetry.position.y - control_telemetry.size.y - 5)
+	# Center dashboard panel at top
+	_dash_panel.position = Vector2((vp.x - _dash_panel.size.x) / 2, 16)
 	# Bottom-left hotkey bar
 	info_label.position = Vector2(20, vp.y - 30)
 	# Center-top notification
-	respawn_label.position = Vector2(vp.x / 2 - 100, 16)
+	respawn_label.position = Vector2(vp.x / 2 - 100, 60)
 
 func _make_panel_style(bg_color: Color, radius: int) -> StyleBoxFlat:
 	var s = StyleBoxFlat.new()

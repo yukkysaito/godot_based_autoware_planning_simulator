@@ -83,6 +83,8 @@ class LaneletBridgeNode(Node):
 
         all_lanelets = self._extract_lanelets(lanelet_map)
         intersection_areas = self._extract_intersection_areas(lanelet_map)
+        hatched_road_markings = self._extract_hatched_road_markings(lanelet_map)
+        parking_lots = self._extract_parking_lots(lanelet_map)
         road_borders = self._extract_road_borders(lanelet_map)
         shoulders = self._extract_shoulders(lanelet_map)
         road_markings = self._extract_road_markings(lanelet_map)
@@ -90,6 +92,7 @@ class LaneletBridgeNode(Node):
 
         self.get_logger().info(
             f"Prepared: {len(all_lanelets)} ll, {len(intersection_areas)} ia, "
+            f"{len(hatched_road_markings)} hm, {len(parking_lots)} pk, "
             f"{len(road_borders)} rb, {len(shoulders)} sh, {len(road_markings)} rm, "
             f"{len(traffic_light_groups)} tl"
         )
@@ -104,6 +107,14 @@ class LaneletBridgeNode(Node):
             chunk = intersection_areas[i:i+BS]
             if chunk:
                 self._batches.append({"intersection_areas": chunk})
+        for i in range(0, max(len(hatched_road_markings), 1), BS):
+            chunk = hatched_road_markings[i:i+BS]
+            if chunk:
+                self._batches.append({"hatched_road_markings": chunk})
+        for i in range(0, max(len(parking_lots), 1), BS):
+            chunk = parking_lots[i:i+BS]
+            if chunk:
+                self._batches.append({"parking_lots": chunk})
         for i in range(0, max(len(road_borders), 1), BS):
             chunk = road_borders[i:i+BS]
             if chunk:
@@ -179,18 +190,27 @@ class LaneletBridgeNode(Node):
             lanelets.append({"id": int(ll.id), "left": left_pts, "right": right_pts})
         return lanelets
 
-    def _extract_intersection_areas(self, lanelet_map) -> list:
+    def _extract_polygons_by_type(self, lanelet_map, type_name: str) -> list:
         areas = []
         for poly in lanelet_map.polygonLayer:
             if "type" not in poly.attributes:
                 continue
-            if str(poly.attributes["type"]) != "intersection_area":
+            if str(poly.attributes["type"]) != type_name:
                 continue
             pts = [[round(p.x, 3), round(p.y, 3), round(p.z, 3)] for p in poly]
             if len(pts) < 3:
                 continue
             areas.append({"id": int(poly.id), "points": pts})
         return areas
+
+    def _extract_intersection_areas(self, lanelet_map) -> list:
+        return self._extract_polygons_by_type(lanelet_map, "intersection_area")
+
+    def _extract_hatched_road_markings(self, lanelet_map) -> list:
+        return self._extract_polygons_by_type(lanelet_map, "hatched_road_markings")
+
+    def _extract_parking_lots(self, lanelet_map) -> list:
+        return self._extract_polygons_by_type(lanelet_map, "parking_lot")
 
     def _extract_road_borders(self, lanelet_map) -> list:
         borders = []

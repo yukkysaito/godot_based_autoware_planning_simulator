@@ -16,6 +16,8 @@ var _total_batches: int = 0
 var _fetched_batches: int = 0
 var _all_lanelets: Array = []
 var _all_intersection_areas: Array = []
+var _all_hatched_road_markings: Array = []
+var _all_parking_lots: Array = []
 var _all_road_borders: Array = []
 var _all_shoulders: Array = []
 var _all_road_markings: Array = []
@@ -23,11 +25,19 @@ var _all_traffic_light_groups: Array = []
 var _built: bool = false
 var _fetching: bool = false
 var _retry_timer: float = 0.0
+var _fetch_timeout: float = 0.0
 
 signal map_loaded
 
 func _process(delta):
-	if _built or _fetching or not ros_bridge:
+	if _built or not ros_bridge:
+		return
+	if _fetching:
+		_fetch_timeout += delta
+		if _fetch_timeout > 2.0:
+			print("[LaneletMap] Fetch timed out, will retry...")
+			_fetching = false
+			_fetch_timeout = 0.0
 		return
 	if not ros_bridge.viewer_offset_valid:
 		return
@@ -40,6 +50,7 @@ func _start_fetch():
 	# Step 1: call batch_count service
 	print("[LaneletMap] Requesting batch count...")
 	_fetching = true
+	_fetch_timeout = 0.0
 	ros_bridge._send_json({
 		"op": "call_service",
 		"service": "/godot/lanelet_batch_count",
@@ -50,14 +61,17 @@ func _start_fetch():
 
 func handle_service_response(id: String, values: Dictionary):
 	## Called by ros_bridge when a service response arrives.
+	if not _fetching:
+		return  # ignore stale responses from timed-out requests
+	_fetch_timeout = 0.0
 	if id == "lanelet_batch_count":
 		var count = int(values.get("message", "0"))
 		var success = values.get("success", false)
 		if success and count > 0:
 			_total_batches = count
 			_fetched_batches = 0
+			_clear_accumulated_data()
 			print("[LaneletMap] %d batches available, fetching..." % count)
-			# Request first batch (with reset=true)
 			_fetch_next_batch(true)
 		else:
 			print("[LaneletMap] No batches available yet, retrying...")
@@ -80,6 +94,16 @@ func handle_service_response(id: String, values: Dictionary):
 			_fetching = false
 			_build_map()
 
+func _clear_accumulated_data():
+	_all_lanelets = []
+	_all_intersection_areas = []
+	_all_hatched_road_markings = []
+	_all_parking_lots = []
+	_all_road_borders = []
+	_all_shoulders = []
+	_all_road_markings = []
+	_all_traffic_light_groups = []
+
 func _fetch_next_batch(reset: bool):
 	ros_bridge._send_json({
 		"op": "call_service",
@@ -92,6 +116,8 @@ func _fetch_next_batch(reset: bool):
 func _ingest_batch(data: Dictionary):
 	_all_lanelets.append_array(data.get("lanelets", []))
 	_all_intersection_areas.append_array(data.get("intersection_areas", []))
+	_all_hatched_road_markings.append_array(data.get("hatched_road_markings", []))
+	_all_parking_lots.append_array(data.get("parking_lots", []))
 	_all_road_borders.append_array(data.get("road_borders", []))
 	_all_shoulders.append_array(data.get("shoulders", []))
 	_all_road_markings.append_array(data.get("road_markings", []))
@@ -101,8 +127,9 @@ func _build_map():
 	_built = true
 	var lanelets = _all_lanelets
 	var ia_list = _all_intersection_areas
-	print("[LaneletMap] Building: %d ll, %d ia, %d rb, %d sh, %d rm" % [
-		lanelets.size(), ia_list.size(), _all_road_borders.size(),
+	print("[LaneletMap] Building: %d ll, %d ia, %d hm, %d pk, %d rb, %d sh, %d rm" % [
+		lanelets.size(), ia_list.size(), _all_hatched_road_markings.size(),
+		_all_parking_lots.size(), _all_road_borders.size(),
 		_all_shoulders.size(), _all_road_markings.size()])
 
 	if lanelets.size() == 0 and ia_list.size() == 0:
@@ -128,6 +155,18 @@ func _build_map():
 			continue
 		_triangulate_fan(_to_godot_points(pts_raw), all_vertices, all_indices)
 		ia_tris += pts_raw.size() - 2
+
+	for hm in _all_hatched_road_markings:
+		var pts_raw: Array = hm.get("points", [])
+		if pts_raw.size() < 3:
+			continue
+		_triangulate_fan(_to_godot_points(pts_raw), all_vertices, all_indices)
+
+	for pk in _all_parking_lots:
+		var pts_raw: Array = pk.get("points", [])
+		if pts_raw.size() < 3:
+			continue
+		_triangulate_fan(_to_godot_points(pts_raw), all_vertices, all_indices)
 
 	var sh_tris := 0
 	for sh in _all_shoulders:

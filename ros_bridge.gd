@@ -458,6 +458,8 @@ func _traffic_shape_to_arrow(val: int) -> String:
 func _handle_service_response(data: Dictionary):
 	var id = data.get("id", "")
 	var values = data.get("values", {})
+	if not values is Dictionary:
+		values = {}
 	# Forward to lanelet_map if it's a lanelet-related response
 	if lanelet_map and is_instance_valid(lanelet_map):
 		if id in ["lanelet_batch_count", "lanelet_batch"]:
