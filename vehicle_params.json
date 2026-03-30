@@ -24,6 +24,12 @@
   "steer_high_speed_ratio": 0.15,
   "creep_force": 1500.0,
   "creep_max_speed": 8.0,
+  "full_brake_decel": 1.5,
+  "tf_delay": 0.0,
+  "odom_delay": 0.0,
+  "velocity_delay": 0.0,
+  "steering_delay": 0.0,
+  "accel_delay": 0.0,
 
   "rolling_resistance_coeff": 0.003,
   "drag_coefficient": 0.45,

@@ -13,6 +13,15 @@ signal car_rebuild_requested
 
 const GEOM_PROPS = ["wheel_base", "tread", "front_overhang", "rear_overhang", "wheel_radius_param",
 	"body_height", "body_width_margin"]
+const CAR_PARAM_PROPS = preload("res://car.gd").PARAM_PROPS
+const BRIDGE_PARAM_PROPS = [
+	"full_brake_decel",
+	"tf_delay",
+	"odom_delay",
+	"velocity_delay",
+	"steering_delay",
+	"accel_delay",
+]
 
 # "target" field: "car" or "bridge" — determines which node the property lives on.
 const PARAMS = [
@@ -218,6 +227,7 @@ func _reset_defaults():
 	# Reload from the currently loaded JSON (or code defaults if none)
 	if not car.loaded_params_path.is_empty():
 		car.load_params_from_json(car.loaded_params_path)
+		load_bridge_params_from_json(car.loaded_params_path)
 	else:
 		var fresh = preload("res://car.tscn").instantiate()
 		for prop in _sliders:
@@ -226,11 +236,7 @@ func _reset_defaults():
 				if val != null:
 					car.set(prop, val)
 		fresh.queue_free()
-	# Reset sensor delays to 0
-	if ros_bridge and is_instance_valid(ros_bridge):
-		for prop in _sliders:
-			if _sliders[prop]["target"] == "bridge":
-				ros_bridge.set(prop, 0.0)
+		_reset_bridge_defaults()
 	car_rebuild_requested.emit()
 	_sync_all()
 
@@ -258,11 +264,7 @@ func _import_params():
 func _on_import_path_selected(path: String):
 	if not car:
 		return
-	if car.load_params_from_json(path):
-		car.apply_vehicle_params()
-		car_rebuild_requested.emit()
-		_sync_all()
-		_update_path_label()
+	load_all_params_from_json(path)
 
 func _export_params():
 	if not car:
@@ -283,6 +285,85 @@ func _export_params():
 func _on_export_path_selected(path: String):
 	if not car:
 		return
-	if car.save_params_to_json(path):
+	if save_all_params_to_json(path):
 		car.loaded_params_path = path
 		_update_path_label()
+
+func load_all_params_from_json(path: String, rebuild_geometry: bool = true) -> bool:
+	if not car:
+		return false
+	if not car.load_params_from_json(path):
+		return false
+	load_bridge_params_from_json(path)
+	if rebuild_geometry and _json_has_geometry_params(path):
+		car_rebuild_requested.emit()
+	else:
+		car.apply_vehicle_params()
+	_sync_all()
+	_update_path_label()
+	return true
+
+func load_bridge_params_from_json(path: String) -> bool:
+	var data = _read_params_json(path)
+	if data.is_empty() or not ros_bridge or not is_instance_valid(ros_bridge):
+		return false
+	var count := 0
+	for prop in BRIDGE_PARAM_PROPS:
+		if data.has(prop):
+			ros_bridge.set(prop, float(data[prop]))
+			count += 1
+	if count > 0:
+		print("[TuningPanel] Loaded %d bridge params from %s" % [count, path])
+	return count > 0
+
+func save_all_params_to_json(path: String = "") -> bool:
+	if not car:
+		return false
+	if path.is_empty():
+		var exe_dir = OS.get_executable_path().get_base_dir()
+		path = exe_dir.path_join(car.params_json_name)
+	var data := {}
+	for prop in CAR_PARAM_PROPS:
+		data[prop] = car.get(prop)
+	if ros_bridge and is_instance_valid(ros_bridge):
+		for prop in BRIDGE_PARAM_PROPS:
+			data[prop] = ros_bridge.get(prop)
+	var text = JSON.stringify(data, "  ")
+	var file = FileAccess.open(path, FileAccess.WRITE)
+	if not file:
+		print("[TuningPanel] Cannot write params file: %s" % path)
+		return false
+	file.store_string(text + "\n")
+	print("[TuningPanel] Saved params to %s" % path)
+	return true
+
+func _read_params_json(path: String) -> Dictionary:
+	if path.is_empty():
+		return {}
+	var file = FileAccess.open(path, FileAccess.READ)
+	if not file:
+		print("[TuningPanel] Cannot open params file: %s" % path)
+		return {}
+	var json = JSON.new()
+	if json.parse(file.get_as_text()) != OK or not json.data is Dictionary:
+		print("[TuningPanel] Failed to parse params file: %s" % path)
+		return {}
+	return json.data
+
+func _json_has_geometry_params(path: String) -> bool:
+	var data = _read_params_json(path)
+	for prop in GEOM_PROPS:
+		if data.has(prop):
+			return true
+	return false
+
+func _reset_bridge_defaults():
+	if not ros_bridge or not is_instance_valid(ros_bridge):
+		return
+	var fresh_bridge := Node.new()
+	fresh_bridge.set_script(preload("res://ros_bridge.gd"))
+	for prop in BRIDGE_PARAM_PROPS:
+		var val = fresh_bridge.get(prop)
+		if val != null:
+			ros_bridge.set(prop, val)
+	fresh_bridge.free()

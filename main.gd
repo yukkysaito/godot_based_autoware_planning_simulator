@@ -379,6 +379,8 @@ func _setup_hud():
 	tuning_panel.set_car(car)
 	tuning_panel.set_ros_bridge(ros_bridge)
 	tuning_panel.car_rebuild_requested.connect(_on_car_rebuild_requested)
+	if not car.loaded_params_path.is_empty():
+		tuning_panel.load_bridge_params_from_json(car.loaded_params_path)
 
 	# --- Telemetry ---
 	telemetry = Control.new()
@@ -451,6 +453,8 @@ func _input(event):
 func _on_car_rebuild_requested():
 	var params := {}
 	for prop in tuning_panel._sliders:
+		if tuning_panel._sliders[prop].get("target", "car") != "car":
+			continue
 		params[prop] = car.get(prop)
 	var pos = car.global_position
 	var rot_y = car.global_rotation.y
