@@ -64,6 +64,34 @@ const AW_GEAR_PARK = 22
 const AW_MODE_AUTONOMOUS = 1
 const AW_MODE_MANUAL = 4
 
+const PARAM_PROPS: Array[String] = [
+	"full_brake_decel",
+	"odom_delay", "velocity_delay", "steering_delay", "accel_delay", "tf_delay",
+]
+
+func apply_params_dict(data: Dictionary) -> int:
+	var count := 0
+	for prop in PARAM_PROPS:
+		if data.has(prop):
+			set(prop, float(data[prop]))
+			count += 1
+	return count
+
+func load_params_from_json(path: String) -> bool:
+	if path.is_empty():
+		return false
+	var file = FileAccess.open(path, FileAccess.READ)
+	if not file:
+		print("[ROS bridge] Cannot open params file: %s" % path)
+		return false
+	var json = JSON.new()
+	if json.parse(file.get_as_text()) != OK or not json.data is Dictionary:
+		print("[ROS bridge] Failed to parse params file: %s" % path)
+		return false
+	var count := apply_params_dict(json.data)
+	print("[ROS bridge] Loaded %d params from %s" % [count, path])
+	return count > 0
+
 func _ready():
 	_ws = WebSocketPeer.new()
 	_ws.inbound_buffer_size = 16 * 1024 * 1024  # 16 MB

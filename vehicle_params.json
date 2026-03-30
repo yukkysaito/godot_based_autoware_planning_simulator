@@ -16,6 +16,8 @@
   "brake_time_constant": 0.05,
   "steering_time_constant": 0.1,
 
+  "full_brake_decel": 1.5,
+
   "max_engine_force": 10000.0,
   "max_brake_force": 70.0,
   "max_steer_angle": 0.61,

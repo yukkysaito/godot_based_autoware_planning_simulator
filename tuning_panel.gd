@@ -212,25 +212,75 @@ func _fmt(prop: String, value: float):
 	var s = _sliders[prop]["step"]
 	_sliders[prop]["label"].text = ("%.3f" if s < 0.01 else ("%.2f" if s < 0.1 else ("%.1f" if s < 1.0 else "%.0f"))) % value
 
+func _read_params_json(path: String) -> Variant:
+	var file = FileAccess.open(path, FileAccess.READ)
+	if not file:
+		push_warning("Cannot open params file: %s" % path)
+		return null
+	var json = JSON.new()
+	if json.parse(file.get_as_text()) != OK or not json.data is Dictionary:
+		push_warning("Failed to parse params file: %s" % path)
+		return null
+	return json.data
+
+func _write_params_json(path: String, data: Dictionary) -> bool:
+	var file = FileAccess.open(path, FileAccess.WRITE)
+	if not file:
+		push_warning("Cannot write params file: %s" % path)
+		return false
+	file.store_string(JSON.stringify(data, "  ") + "\n")
+	return true
+
+func _collect_panel_params_dict() -> Dictionary:
+	var data := {}
+	for param in PARAMS:
+		if not param.has("prop"):
+			continue
+		var prop = param["prop"]
+		var node = _get_target(prop)
+		if node:
+			data[prop] = node.get(prop)
+	return data
+
+func _apply_panel_params_dict(data: Dictionary) -> int:
+	var count := 0
+	for param in PARAMS:
+		if not param.has("prop"):
+			continue
+		var prop = param["prop"]
+		if not data.has(prop):
+			continue
+		var node = _get_target(prop)
+		if node:
+			node.set(prop, float(data[prop]))
+			count += 1
+	return count
+
 func _reset_defaults():
 	if not car:
 		return
 	# Reload from the currently loaded JSON (or code defaults if none)
 	if not car.loaded_params_path.is_empty():
-		car.load_params_from_json(car.loaded_params_path)
+		var data = _read_params_json(car.loaded_params_path)
+		if data != null:
+			_apply_panel_params_dict(data)
 	else:
 		var fresh = preload("res://car.tscn").instantiate()
-		for prop in _sliders:
-			if _sliders[prop]["target"] == "car":
-				var val = fresh.get(prop)
-				if val != null:
-					car.set(prop, val)
+		var fresh_bridge = Node.new()
+		fresh_bridge.set_script(load("res://ros_bridge.gd"))
+		for param in PARAMS:
+			if not param.has("prop"):
+				continue
+			var prop = param["prop"]
+			var src = fresh_bridge if param.get("target", "car") == "bridge" else fresh
+			var dst = _get_target(prop)
+			if not dst:
+				continue
+			var val = src.get(prop)
+			if val != null:
+				dst.set(prop, val)
+		fresh_bridge.free()
 		fresh.queue_free()
-	# Reset sensor delays to 0
-	if ros_bridge and is_instance_valid(ros_bridge):
-		for prop in _sliders:
-			if _sliders[prop]["target"] == "bridge":
-				ros_bridge.set(prop, 0.0)
 	car_rebuild_requested.emit()
 	_sync_all()
 
@@ -258,7 +308,11 @@ func _import_params():
 func _on_import_path_selected(path: String):
 	if not car:
 		return
-	if car.load_params_from_json(path):
+	var data = _read_params_json(path)
+	if data == null:
+		return
+	if _apply_panel_params_dict(data) > 0:
+		car.loaded_params_path = path
 		car.apply_vehicle_params()
 		car_rebuild_requested.emit()
 		_sync_all()
@@ -283,6 +337,6 @@ func _export_params():
 func _on_export_path_selected(path: String):
 	if not car:
 		return
-	if car.save_params_to_json(path):
+	if _write_params_json(path, _collect_panel_params_dict()):
 		car.loaded_params_path = path
 		_update_path_label()

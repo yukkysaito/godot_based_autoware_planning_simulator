@@ -146,6 +146,20 @@ const PARAM_PROPS: Array[String] = [
 	"respawn_below_y", "flip_respawn_time",
 ]
 
+func get_params_dict() -> Dictionary:
+	var data := {}
+	for prop in PARAM_PROPS:
+		data[prop] = get(prop)
+	return data
+
+func apply_params_dict(data: Dictionary) -> int:
+	var count := 0
+	for prop in PARAM_PROPS:
+		if data.has(prop):
+			set(prop, float(data[prop]))
+			count += 1
+	return count
+
 func _resolve_params_path() -> String:
 	# 1. CLI argument: --vehicle-params <path>
 	var args = OS.get_cmdline_args() + OS.get_cmdline_user_args()
@@ -182,11 +196,7 @@ func load_params_from_json(path: String = "") -> bool:
 		print("[Car] Failed to parse params file: %s" % path)
 		return false
 	var data: Dictionary = json.data
-	var count := 0
-	for key in data:
-		if key in self:
-			set(key, float(data[key]))
-			count += 1
+	var count := apply_params_dict(data)
 	loaded_params_path = path
 	print("[Car] Loaded %d params from %s" % [count, path])
 	return true
@@ -195,9 +205,7 @@ func save_params_to_json(path: String = "") -> bool:
 	if path.is_empty():
 		var exe_dir = OS.get_executable_path().get_base_dir()
 		path = exe_dir.path_join(params_json_name)
-	var data := {}
-	for prop in PARAM_PROPS:
-		data[prop] = get(prop)
+	var data := get_params_dict()
 	var text = JSON.stringify(data, "  ")
 	var file = FileAccess.open(path, FileAccess.WRITE)
 	if not file:

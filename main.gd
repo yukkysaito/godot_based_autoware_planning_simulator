@@ -227,6 +227,8 @@ func _setup_ros_bridge():
 	ros_bridge = Node.new()
 	ros_bridge.set_script(load("res://ros_bridge.gd"))
 	ros_bridge.car = car
+	if not car.loaded_params_path.is_empty():
+		ros_bridge.load_params_from_json(car.loaded_params_path)
 	# lanelet_map reference is set later in _setup_lanelet_map()
 	add_child(ros_bridge)
 
