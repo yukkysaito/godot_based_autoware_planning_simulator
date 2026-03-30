@@ -110,7 +110,7 @@ The simulator automatically connects to rosbridge (`ws://localhost:9090`) and re
 **With a custom vehicle params file:**
 
 ```bash
-./godot_autoware_simulator.x86_64 -- --vehicle-params /path/to/custom_params.json
+./godot_autoware_simulator.x86_64 --vehicle-params /path/to/custom_params.json
 ```
 
 **From source (Godot editor):**
