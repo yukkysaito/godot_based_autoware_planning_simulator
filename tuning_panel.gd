@@ -151,6 +151,8 @@ func _build_ui():
 	vbox.add_child(HSeparator.new())
 
 	_path_label = Label.new()
+	_path_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_path_label.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
 	_path_label.add_theme_font_size_override("font_size", 11)
 	_path_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.4))
 	_path_label.text = ""
@@ -243,7 +245,13 @@ func _reset_defaults():
 func _update_path_label():
 	if _path_label and car:
 		var p = car.loaded_params_path
-		_path_label.text = p if not p.is_empty() else "(defaults)"
+		if p.is_empty():
+			_path_label.text = "(defaults)"
+			_path_label.tooltip_text = ""
+		else:
+			var shown = ProjectSettings.globalize_path(p) if p.begins_with("res://") else p
+			_path_label.text = shown
+			_path_label.tooltip_text = shown
 
 func _import_params():
 	if not car:
