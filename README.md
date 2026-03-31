@@ -126,34 +126,6 @@ Or open the project in the Godot editor and press F5.
 Use RViz2's "2D Pose Estimate" tool to place the vehicle on the map.
 Until an initial pose is set, the vehicle starts on a default 1km x 1km ground plane at the origin.
 
-## Replay A Recorded MCAP Log
-
-If you want to drive the simulator from a recorded rosbag2/MCAP log instead of a live Autoware stack, use [`scripts/replay_webauto_mcap.sh`](scripts/replay_webauto_mcap.sh).
-
-This helper script:
-
-- starts `rosbridge_server`
-- starts `scripts/lanelet_bridge_node.py`
-- replays only the topics the Godot simulator consumes, so recorded `/tf` and vehicle status outputs do not fight with the simulator's own publishers
-- includes both `/control/command/control_cmd` and `/control/command/actuation_cmd`; select which one drives the simulator from the tuning panel
-
-Example:
-
-```bash
-AUTOWARE_SETUP=/path/to/autoware/install/setup.bash \
-./scripts/replay_webauto_mcap.sh /path/to/log_dir
-```
-
-By default the script waits for Enter before starting bag playback, which gives you time to launch Godot first.
-If Godot is already running, you can skip the prompt:
-
-```bash
-AUTOWARE_SETUP=/path/to/autoware/install/setup.bash \
-./scripts/replay_webauto_mcap.sh /path/to/log_dir --no-wait --rate 1.0
-```
-
-The script writes ROS temporary files under `/tmp` via `ROS_HOME` / `ROS_LOG_DIR`, so it does not depend on `~/.ros` being writable.
-
 ## Fit Vehicle Params From A Recorded MCAP
 
 Use [`scripts/fit_vehicle_params.py`](scripts/fit_vehicle_params.py) to estimate a first-pass parameter update from a recorded bag.
