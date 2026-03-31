@@ -126,6 +126,54 @@ Or open the project in the Godot editor and press F5.
 Use RViz2's "2D Pose Estimate" tool to place the vehicle on the map.
 Until an initial pose is set, the vehicle starts on a default 1km x 1km ground plane at the origin.
 
+## Replay A Recorded MCAP Log
+
+If you want to drive the simulator from a recorded rosbag2/MCAP log instead of a live Autoware stack, use [`scripts/replay_webauto_mcap.sh`](scripts/replay_webauto_mcap.sh).
+
+This helper script:
+
+- starts `rosbridge_server`
+- starts `scripts/lanelet_bridge_node.py`
+- replays only the topics the Godot simulator consumes, so recorded `/tf` and vehicle status outputs do not fight with the simulator's own publishers
+- includes both `/control/command/control_cmd` and `/control/command/actuation_cmd`; select which one drives the simulator from the tuning panel
+
+Example:
+
+```bash
+AUTOWARE_SETUP=/path/to/autoware/install/setup.bash \
+./scripts/replay_webauto_mcap.sh /path/to/log_dir
+```
+
+By default the script waits for Enter before starting bag playback, which gives you time to launch Godot first.
+If Godot is already running, you can skip the prompt:
+
+```bash
+AUTOWARE_SETUP=/path/to/autoware/install/setup.bash \
+./scripts/replay_webauto_mcap.sh /path/to/log_dir --no-wait --rate 1.0
+```
+
+The script writes ROS temporary files under `/tmp` via `ROS_HOME` / `ROS_LOG_DIR`, so it does not depend on `~/.ros` being writable.
+
+## Fit Vehicle Params From A Recorded MCAP
+
+Use [`scripts/fit_vehicle_params.py`](scripts/fit_vehicle_params.py) to estimate a first-pass parameter update from a recorded bag.
+
+```bash
+source /opt/ros/humble/setup.bash
+source /path/to/autoware/install/setup.bash
+python3 scripts/fit_vehicle_params.py /path/to/log_dir \
+  --output-report /tmp/driving_game_fit_report.json \
+  --write-params /tmp/driving_game_fit_params.json
+```
+
+The fitter currently targets the parameters that are identifiable from control, odometry, acceleration, and steering logs:
+
+- response delays / time constants for accel, brake, steering
+- understeer gradient
+- heuristic actuation / brake scaling
+
+Resistance parameters are reported conservatively and may be left unchanged when the bag does not contain enough clean coast data.
+
 ## Controls
 
 | Key | Action |
@@ -200,7 +248,7 @@ Vehicle parameters are stored in `vehicle_params.json`. On startup, the simulato
 
 **Option A — Edit the JSON file directly:**
 
-Edit `vehicle_params.json` next to the binary and restart the simulator.
+Edit `vehicle_params.json` next to the binary and restart the simulator. The default file is sectioned into `common`, `input_source`, `control_cmd`, `actuation_cmd`, and `sensor_delay`.
 
 **Option B — Use the in-game tuning panel (Tab key):**
 
@@ -212,8 +260,8 @@ Use **Import JSON** to load a different parameter file at runtime.
 
 - **Geometry**: Wheelbase, tread, overhang, wheel radius (requires car rebuild)
 - **Powertrain**: Engine force, brake force, steering angle, creep
-- **Transport Delay**: Pure time delay for throttle, brake, steering
-- **Time Constant**: 1st order lag for throttle, brake, steering
+- **Control Cmd**: Delay, time constant, and brake mapping used when `control_cmd` drives the sim
+- **Actuation Cmd**: Delay, time constant, and fallback scaling used when `actuation_cmd` drives the sim
 - **Sensor Delay**: Output delay for TF, odometry, velocity, steering, acceleration
 - **Resistance**: Rolling resistance, drag coefficient, frontal area
 - **Suspension**: Stiffness, travel, damping, max force, friction slip

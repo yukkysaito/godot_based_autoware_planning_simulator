@@ -181,15 +181,39 @@ func load_params_from_json(path: String = "") -> bool:
 	if json.parse(file.get_as_text()) != OK or not json.data is Dictionary:
 		print("[Car] Failed to parse params file: %s" % path)
 		return false
-	var data: Dictionary = json.data
+	var data: Dictionary = _extract_common_params(json.data)
 	var count := 0
 	for key in data:
 		if key in self:
-			set(key, float(data[key]))
+			_assign_param_value(key, data[key])
 			count += 1
 	loaded_params_path = path
 	print("[Car] Loaded %d params from %s" % [count, path])
 	return true
+
+func _extract_common_params(root: Dictionary) -> Dictionary:
+	var data := {}
+	var common = root.get("common", {})
+	if common is Dictionary:
+		for key in common:
+			data[key] = common[key]
+	for key in root:
+		if root[key] is Dictionary:
+			continue
+		data[key] = root[key]
+	return data
+
+func _assign_param_value(prop: String, value):
+	var current = get(prop)
+	match typeof(current):
+		TYPE_INT:
+			set(prop, int(value))
+		TYPE_BOOL:
+			set(prop, bool(value))
+		TYPE_STRING:
+			set(prop, str(value))
+		_:
+			set(prop, float(value))
 
 func save_params_to_json(path: String = "") -> bool:
 	if path.is_empty():

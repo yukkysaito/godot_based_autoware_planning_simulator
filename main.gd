@@ -490,6 +490,7 @@ func _rebind_car_references():
 	control_telemetry.car = car
 	trail.car = car
 	ros_bridge.car = car
+	ros_bridge.refresh_active_response_profile()
 
 # ==========================================================================
 # Helpers

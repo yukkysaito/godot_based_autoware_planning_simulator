@@ -5,6 +5,8 @@ extends PanelContainer
 var car: VehicleBody3D
 var ros_bridge: Node  # ros_bridge.gd instance
 var _sliders: Dictionary = {}
+var _source_select: OptionButton
+var _source_status_label: Label
 var _path_label: Label
 var _export_dialog: FileDialog
 var _import_dialog: FileDialog
@@ -13,15 +15,18 @@ signal car_rebuild_requested
 
 const GEOM_PROPS = ["wheel_base", "tread", "front_overhang", "rear_overhang", "wheel_radius_param",
 	"body_height", "body_width_margin"]
-const CAR_PARAM_PROPS = preload("res://car.gd").PARAM_PROPS
-const BRIDGE_PARAM_PROPS = [
-	"full_brake_decel",
-	"tf_delay",
-	"odom_delay",
-	"velocity_delay",
-	"steering_delay",
-	"accel_delay",
+const CAR_COMMON_EXCLUDED_PROPS = [
+	"accel_response_delay", "brake_response_delay", "steering_response_delay",
+	"accel_time_constant", "brake_time_constant", "steering_time_constant",
 ]
+const CAR_PARAM_PROPS = preload("res://car.gd").PARAM_PROPS
+const ROS_BRIDGE_SCRIPT = preload("res://ros_bridge.gd")
+const CONTROL_CMD_PARAM_PROPS = ROS_BRIDGE_SCRIPT.CONTROL_CMD_PARAM_PROPS
+const ACTUATION_CMD_PARAM_PROPS = ROS_BRIDGE_SCRIPT.ACTUATION_CMD_PARAM_PROPS
+const ACTUATION_CMD_EXTRA_PROPS = ROS_BRIDGE_SCRIPT.ACTUATION_CMD_EXTRA_PROPS
+const SENSOR_DELAY_PARAM_PROPS = ROS_BRIDGE_SCRIPT.SENSOR_DELAY_PARAM_PROPS
+const BRIDGE_PARAM_PROPS = CONTROL_CMD_PARAM_PROPS + ACTUATION_CMD_PARAM_PROPS \
+	+ ACTUATION_CMD_EXTRA_PROPS + SENSOR_DELAY_PARAM_PROPS + ["preferred_input_source"]
 
 # "target" field: "car" or "bridge" — determines which node the property lives on.
 const PARAMS = [
@@ -40,16 +45,29 @@ const PARAMS = [
 	{"name": "Max Steer Angle [rad]", "prop": "max_steer_angle", "min": 0.1, "max": 1.0, "step": 0.01, "target": "car"},
 	{"name": "Steer Speed Threshold [km/h]", "prop": "steer_speed_threshold", "min": 10, "max": 120, "step": 5, "target": "car"},
 	{"name": "Steer High Speed Ratio", "prop": "steer_high_speed_ratio", "min": 0.05, "max": 1.0, "step": 0.05, "target": "car"},
-	{"group": "Transport Delay [s]"},
-	{"name": "Accel Delay", "prop": "accel_response_delay", "min": 0.0, "max": 1.0, "step": 0.01, "target": "car"},
-	{"name": "Brake Delay", "prop": "brake_response_delay", "min": 0.0, "max": 0.5, "step": 0.01, "target": "car"},
-	{"name": "Steering Delay", "prop": "steering_response_delay", "min": 0.0, "max": 0.5, "step": 0.01, "target": "car"},
-	{"group": "Time Constant (1st order lag) [s]"},
-	{"name": "Accel TC", "prop": "accel_time_constant", "min": 0.0, "max": 1.0, "step": 0.01, "target": "car"},
-	{"name": "Brake TC", "prop": "brake_time_constant", "min": 0.0, "max": 0.5, "step": 0.01, "target": "car"},
-	{"name": "Steering TC", "prop": "steering_time_constant", "min": 0.0, "max": 0.5, "step": 0.01, "target": "car"},
-	{"group": "Control Mapping"},
-	{"name": "Full Brake Decel [m/s²]", "prop": "full_brake_decel", "min": 0.1, "max": 5.0, "step": 0.1, "target": "bridge"},
+	{"group": "Control Cmd Delay [s]"},
+	{"name": "Accel Delay", "prop": "control_accel_response_delay", "min": 0.0, "max": 1.0, "step": 0.01, "target": "bridge"},
+	{"name": "Brake Delay", "prop": "control_brake_response_delay", "min": 0.0, "max": 0.8, "step": 0.01, "target": "bridge"},
+	{"name": "Steering Delay", "prop": "control_steering_response_delay", "min": 0.0, "max": 0.5, "step": 0.01, "target": "bridge"},
+	{"group": "Control Cmd Time Constant [s]"},
+	{"name": "Accel TC", "prop": "control_accel_time_constant", "min": 0.0, "max": 1.0, "step": 0.01, "target": "bridge"},
+	{"name": "Brake TC", "prop": "control_brake_time_constant", "min": 0.0, "max": 0.8, "step": 0.01, "target": "bridge"},
+	{"name": "Steering TC", "prop": "control_steering_time_constant", "min": 0.0, "max": 0.5, "step": 0.01, "target": "bridge"},
+	{"group": "Control Cmd Mapping"},
+	{"name": "Full Brake Decel [m/s²]", "prop": "control_full_brake_decel", "min": 0.1, "max": 5.0, "step": 0.1, "target": "bridge"},
+	{"name": "Cmd Timeout [s]", "prop": "control_cmd_timeout_sec", "min": 0.1, "max": 2.0, "step": 0.05, "target": "bridge"},
+	{"group": "Actuation Cmd Delay [s]"},
+	{"name": "Accel Delay", "prop": "actuation_accel_response_delay", "min": 0.0, "max": 1.0, "step": 0.01, "target": "bridge"},
+	{"name": "Brake Delay", "prop": "actuation_brake_response_delay", "min": 0.0, "max": 0.8, "step": 0.01, "target": "bridge"},
+	{"name": "Steering Delay", "prop": "actuation_steering_response_delay", "min": 0.0, "max": 0.5, "step": 0.01, "target": "bridge"},
+	{"group": "Actuation Cmd Time Constant [s]"},
+	{"name": "Accel TC", "prop": "actuation_accel_time_constant", "min": 0.0, "max": 1.0, "step": 0.01, "target": "bridge"},
+	{"name": "Brake TC", "prop": "actuation_brake_time_constant", "min": 0.0, "max": 0.8, "step": 0.01, "target": "bridge"},
+	{"name": "Steering TC", "prop": "actuation_steering_time_constant", "min": 0.0, "max": 0.5, "step": 0.01, "target": "bridge"},
+	{"group": "Actuation Cmd Mapping"},
+	{"name": "Full Brake Decel [m/s²]", "prop": "actuation_full_brake_decel", "min": 0.1, "max": 5.0, "step": 0.1, "target": "bridge"},
+	{"name": "Accel Fallback Scale", "prop": "actuation_accel_full_scale", "min": 50.0, "max": 500.0, "step": 5.0, "target": "bridge"},
+	{"name": "Cmd Timeout [s]", "prop": "actuation_cmd_timeout_sec", "min": 0.1, "max": 2.0, "step": 0.05, "target": "bridge"},
 	{"group": "Sensor Output Delay [s]"},
 	{"name": "TF Delay", "prop": "tf_delay", "min": 0.0, "max": 1.0, "step": 0.01, "target": "bridge"},
 	{"name": "Odometry Delay", "prop": "odom_delay", "min": 0.0, "max": 1.0, "step": 0.01, "target": "bridge"},
@@ -81,6 +99,9 @@ func _ready():
 	visible = false
 	_build_ui()
 
+func _process(_delta):
+	_sync_source_status()
+
 func _build_ui():
 	var style = StyleBoxFlat.new()
 	style.bg_color = Color(0.06, 0.06, 0.09, 0.92)
@@ -107,6 +128,30 @@ func _build_ui():
 	title.add_theme_font_size_override("font_size", 16)
 	title.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
 	vbox.add_child(title)
+
+	var source_row = HBoxContainer.new()
+	source_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(source_row)
+
+	var source_label = Label.new()
+	source_label.text = "Input Source"
+	source_label.custom_minimum_size.x = 185
+	source_label.add_theme_font_size_override("font_size", 13)
+	source_row.add_child(source_label)
+
+	_source_select = OptionButton.new()
+	_source_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_source_select.add_item("CONTROL", ROS_BRIDGE_SCRIPT.INPUT_SOURCE_CONTROL_CMD)
+	_source_select.add_item("ACTUATION", ROS_BRIDGE_SCRIPT.INPUT_SOURCE_ACTUATION_CMD)
+	_source_select.item_selected.connect(_on_source_selected)
+	source_row.add_child(_source_select)
+
+	_source_status_label = Label.new()
+	_source_status_label.add_theme_font_size_override("font_size", 12)
+	_source_status_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.45))
+	_source_status_label.text = ""
+	vbox.add_child(_source_status_label)
+
 	vbox.add_child(HSeparator.new())
 
 	for param in PARAMS:
@@ -189,6 +234,22 @@ func set_ros_bridge(bridge: Node):
 	ros_bridge = bridge
 	_sync_all()
 
+func _sync_source_select():
+	if not _source_select or not ros_bridge or not is_instance_valid(ros_bridge):
+		return
+	for idx in range(_source_select.get_item_count()):
+		if _source_select.get_item_id(idx) == ros_bridge.preferred_input_source:
+			_source_select.select(idx)
+			return
+
+func _sync_source_status():
+	if not _source_status_label:
+		return
+	if not ros_bridge or not is_instance_valid(ros_bridge):
+		_source_status_label.text = ""
+		return
+	_source_status_label.text = "Status: %s" % ros_bridge.get_input_source_status()
+
 func _get_target(prop: String) -> Node:
 	var info = _sliders.get(prop, {})
 	if info.get("target") == "bridge" and ros_bridge and is_instance_valid(ros_bridge):
@@ -198,6 +259,7 @@ func _get_target(prop: String) -> Node:
 	return null
 
 func _sync_all():
+	_sync_source_select()
 	for prop in _sliders:
 		var node = _get_target(prop)
 		if node:
@@ -206,12 +268,19 @@ func _sync_all():
 				_sliders[prop]["slider"].set_value_no_signal(val)
 				_fmt(prop, val)
 
+func _on_source_selected(index: int):
+	if not ros_bridge or not is_instance_valid(ros_bridge):
+		return
+	ros_bridge.set_preferred_input_source(_source_select.get_item_id(index))
+
 func _on_slider_changed(value: float, prop: String):
 	_fmt(prop, value)
 	var node = _get_target(prop)
 	if not node:
 		return
 	node.set(prop, value)
+	if _sliders[prop]["target"] == "bridge" and ros_bridge and is_instance_valid(ros_bridge):
+		ros_bridge.refresh_active_response_profile()
 	# Car-specific handling
 	if _sliders[prop]["target"] == "car" and car and is_instance_valid(car):
 		if prop in GEOM_PROPS:
@@ -312,17 +381,9 @@ func load_all_params_from_json(path: String, rebuild_geometry: bool = true) -> b
 	return true
 
 func load_bridge_params_from_json(path: String) -> bool:
-	var data = _read_params_json(path)
-	if data.is_empty() or not ros_bridge or not is_instance_valid(ros_bridge):
+	if not ros_bridge or not is_instance_valid(ros_bridge):
 		return false
-	var count := 0
-	for prop in BRIDGE_PARAM_PROPS:
-		if data.has(prop):
-			ros_bridge.set(prop, float(data[prop]))
-			count += 1
-	if count > 0:
-		print("[TuningPanel] Loaded %d bridge params from %s" % [count, path])
-	return count > 0
+	return ros_bridge.load_params_from_json(path)
 
 func save_all_params_to_json(path: String = "") -> bool:
 	if not car:
@@ -330,12 +391,25 @@ func save_all_params_to_json(path: String = "") -> bool:
 	if path.is_empty():
 		var exe_dir = OS.get_executable_path().get_base_dir()
 		path = exe_dir.path_join(car.params_json_name)
-	var data := {}
+	var data := {
+		"common": {},
+		"input_source": {},
+		"control_cmd": {},
+		"actuation_cmd": {},
+		"sensor_delay": {},
+	}
 	for prop in CAR_PARAM_PROPS:
-		data[prop] = car.get(prop)
+		if prop in CAR_COMMON_EXCLUDED_PROPS:
+			continue
+		data["common"][prop] = car.get(prop)
 	if ros_bridge and is_instance_valid(ros_bridge):
-		for prop in BRIDGE_PARAM_PROPS:
-			data[prop] = ros_bridge.get(prop)
+		data["input_source"]["preferred_input_source"] = ros_bridge.get_preferred_input_source_key()
+		for prop in CONTROL_CMD_PARAM_PROPS:
+			data["control_cmd"][prop] = ros_bridge.get(prop)
+		for prop in ACTUATION_CMD_PARAM_PROPS + ACTUATION_CMD_EXTRA_PROPS:
+			data["actuation_cmd"][prop] = ros_bridge.get(prop)
+		for prop in SENSOR_DELAY_PARAM_PROPS:
+			data["sensor_delay"][prop] = ros_bridge.get(prop)
 	var text = JSON.stringify(data, "  ")
 	var file = FileAccess.open(path, FileAccess.WRITE)
 	if not file:
@@ -360,7 +434,10 @@ func _read_params_json(path: String) -> Dictionary:
 
 func _json_has_geometry_params(path: String) -> bool:
 	var data = _read_params_json(path)
+	var common = data.get("common", {})
 	for prop in GEOM_PROPS:
+		if common is Dictionary and common.has(prop):
+			return true
 		if data.has(prop):
 			return true
 	return false
@@ -374,4 +451,5 @@ func _reset_bridge_defaults():
 		var val = fresh_bridge.get(prop)
 		if val != null:
 			ros_bridge.set(prop, val)
+	ros_bridge.refresh_active_response_profile()
 	fresh_bridge.free()

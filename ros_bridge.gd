@@ -18,10 +18,69 @@ var viewer_offset_y: float = 0.0  # ROS Y (north)
 var viewer_offset_z: float = 0.0  # ROS Z (up)
 var viewer_offset_valid: bool = false
 
+const INPUT_SOURCE_NONE = -1
+const INPUT_SOURCE_CONTROL_CMD = 0
+const INPUT_SOURCE_ACTUATION_CMD = 1
+
+const CONTROL_CMD_PARAM_PROPS: Array[String] = [
+	"control_accel_response_delay",
+	"control_brake_response_delay",
+	"control_steering_response_delay",
+	"control_accel_time_constant",
+	"control_brake_time_constant",
+	"control_steering_time_constant",
+	"control_full_brake_decel",
+	"control_cmd_timeout_sec",
+]
+
+const ACTUATION_CMD_PARAM_PROPS: Array[String] = [
+	"actuation_accel_response_delay",
+	"actuation_brake_response_delay",
+	"actuation_steering_response_delay",
+	"actuation_accel_time_constant",
+	"actuation_brake_time_constant",
+	"actuation_steering_time_constant",
+	"actuation_full_brake_decel",
+	"actuation_accel_full_scale",
+	"actuation_cmd_timeout_sec",
+]
+
+const ACTUATION_CMD_EXTRA_PROPS: Array[String] = [
+]
+
+const SENSOR_DELAY_PARAM_PROPS: Array[String] = [
+	"odom_delay",
+	"velocity_delay",
+	"steering_delay",
+	"accel_delay",
+	"tf_delay",
+]
+
 ## Sensor output delays [s]. Each topic's data is buffered and published
 ## after the specified delay to simulate real sensor latency.
-@export_group("Control Mapping")
-@export var full_brake_decel: float = 1.5  ## Deceleration [m/s²] that maps to cmd_brake=1.0
+@export_group("Input Source")
+@export_enum("Control Cmd", "Actuation Cmd") var preferred_input_source: int = INPUT_SOURCE_CONTROL_CMD
+@export var control_cmd_timeout_sec: float = 0.5
+
+@export_group("Control Cmd Model")
+@export var control_accel_response_delay: float = 0.11
+@export var control_brake_response_delay: float = 0.33
+@export var control_steering_response_delay: float = 0.0
+@export var control_accel_time_constant: float = 0.15
+@export var control_brake_time_constant: float = 0.5
+@export var control_steering_time_constant: float = 0.21
+@export var control_full_brake_decel: float = 0.94
+
+@export_group("Actuation Cmd Model")
+@export var actuation_accel_response_delay: float = 0.1
+@export var actuation_brake_response_delay: float = 0.1
+@export var actuation_steering_response_delay: float = 0.17
+@export var actuation_accel_time_constant: float = 0.1
+@export var actuation_brake_time_constant: float = 0.1
+@export var actuation_steering_time_constant: float = 0.15
+@export var actuation_full_brake_decel: float = 0.94
+@export var actuation_accel_full_scale: float = 350.0  ## accel_cmd value that approximates full drive effort
+@export var actuation_cmd_timeout_sec: float = 0.5
 
 @export_group("Sensor Delay")
 @export var odom_delay: float = 0.0       ## /localization/kinematic_state
@@ -45,6 +104,12 @@ var _auto_steer_cmd: float = 0.0     # rad
 var _auto_accel_cmd: float = 0.0     # m/s²
 var _auto_velocity_cmd: float = 0.0  # m/s
 var _auto_gear_cmd: int = 2          # DRIVE
+var _last_control_cmd_time_sec: float = -1.0
+var _auto_actuation_accel_cmd: float = 0.0
+var _auto_actuation_brake_cmd: float = 0.0
+var _auto_actuation_steer_cmd: float = 0.0
+var _last_actuation_cmd_time_sec: float = -1.0
+var _active_response_profile: int = INPUT_SOURCE_NONE
 
 # For acceleration computation
 var _prev_vx: float = 0.0
@@ -65,7 +130,24 @@ const AW_MODE_AUTONOMOUS = 1
 const AW_MODE_MANUAL = 4
 
 const PARAM_PROPS: Array[String] = [
-	"full_brake_decel",
+	"preferred_input_source",
+	"control_cmd_timeout_sec",
+	"control_accel_response_delay",
+	"control_brake_response_delay",
+	"control_steering_response_delay",
+	"control_accel_time_constant",
+	"control_brake_time_constant",
+	"control_steering_time_constant",
+	"control_full_brake_decel",
+	"actuation_accel_response_delay",
+	"actuation_brake_response_delay",
+	"actuation_steering_response_delay",
+	"actuation_accel_time_constant",
+	"actuation_brake_time_constant",
+	"actuation_steering_time_constant",
+	"actuation_full_brake_decel",
+	"actuation_accel_full_scale",
+	"actuation_cmd_timeout_sec",
 	"odom_delay",
 	"velocity_delay",
 	"steering_delay",
@@ -84,12 +166,15 @@ func load_params_from_json(path: String) -> bool:
 	if json.parse(file.get_as_text()) != OK or not json.data is Dictionary:
 		print("[ROS bridge] Failed to parse params file: %s" % path)
 		return false
-	var data: Dictionary = json.data
 	var count := 0
-	for prop in PARAM_PROPS:
-		if data.has(prop):
-			set(prop, float(data[prop]))
-			count += 1
+	var root: Dictionary = json.data
+	count += _load_param_section(root.get("input_source", {}), ["preferred_input_source"])
+	count += _load_param_section(root.get("control_cmd", {}), CONTROL_CMD_PARAM_PROPS)
+	count += _load_param_section(root.get("actuation_cmd", {}),
+		ACTUATION_CMD_PARAM_PROPS + ACTUATION_CMD_EXTRA_PROPS)
+	count += _load_param_section(root.get("sensor_delay", {}), SENSOR_DELAY_PARAM_PROPS)
+	count += _load_legacy_params(root)
+	refresh_active_response_profile()
 	print("[ROS bridge] Loaded %d params from %s" % [count, path])
 	return count > 0
 
@@ -98,6 +183,7 @@ func _ready():
 	_ws.inbound_buffer_size = 16 * 1024 * 1024  # 16 MB
 	_ws.outbound_buffer_size = 16 * 1024 * 1024
 	_ws.max_queued_packets = 4096
+	refresh_active_response_profile()
 	_connect_to_rosbridge()
 
 func _connect_to_rosbridge():
@@ -173,31 +259,235 @@ func _apply_autoware_control():
 		_:
 			car.set_gear(car.Gear.DRIVE)
 
-	# Write to car.cmd_* — same path as keyboard, goes through transport delay
-	# Steering: normalize tire angle to -1..+1 range
-	car.cmd_steering = clampf(_auto_steer_cmd / car.max_steer_angle, -1.0, 1.0)
+	var active_source = _resolve_input_source_mode()
+	_apply_response_profile(active_source if active_source != INPUT_SOURCE_NONE
+		else _profile_source_from_preference())
 
-	# Acceleration → throttle/brake (0-1 normalized)
+	match active_source:
+		INPUT_SOURCE_ACTUATION_CMD:
+			_apply_actuation_command()
+		INPUT_SOURCE_CONTROL_CMD:
+			_apply_control_command()
+		_:
+			car.cmd_throttle = 0.0
+			car.cmd_brake = 0.0
+			car.cmd_steering = 0.0
+
+	_apply_signal_commands()
+	car.input_enabled = false
+
+func _apply_control_command():
+	car.cmd_steering = clampf(_auto_steer_cmd / maxf(car.max_steer_angle, 0.001), -1.0, 1.0)
 	var accel = _auto_accel_cmd
 	if car.current_gear == car.Gear.REVERSE:
 		accel = -accel
-	if accel >= 0:
-		# Map acceleration to throttle: (F=ma + resistance) / drivetrain_efficiency
+	_apply_longitudinal_accel_target(accel, control_full_brake_decel)
+
+func _apply_longitudinal_accel_target(target_accel: float, full_scale_brake_decel: float):
+	if target_accel >= 0.0:
 		var speed = absf(car.get_forward_speed())
-		var force_needed = (car.mass * accel + car.get_resistance_force(speed)) / 2.0  # per traction wheel
+		var force_needed = (car.mass * target_accel + car.get_resistance_force(speed)) / 2.0
 		var eff = maxf(car.drivetrain_efficiency, 0.1)
 		car.cmd_throttle = clampf(force_needed / (car.max_engine_force * eff), 0.0, 1.0)
 		car.cmd_brake = 0.0
-	else:
-		car.cmd_throttle = 0.0
-		var speed = absf(car.get_forward_speed())
-		var coast = car.rolling_resistance_coeff * 9.81 \
-			+ 0.5 * car.air_density * car.drag_coefficient * car.frontal_area * speed * speed / car.mass \
-			+ car.engine_braking_force * clampf(speed / 10.0, 0.1, 1.0) / car.mass
-		var brake_decel = maxf(absf(accel) - coast, 0.0)
-		var brake_range = maxf(full_brake_decel - coast, 0.01)
-		car.cmd_brake = clampf(brake_decel / brake_range, 0.0, 1.0)
+		return
 
+	car.cmd_throttle = 0.0
+	var speed = absf(car.get_forward_speed())
+	var coast = car.rolling_resistance_coeff * 9.81 \
+		+ 0.5 * car.air_density * car.drag_coefficient * car.frontal_area * speed * speed / car.mass \
+		+ car.engine_braking_force * clampf(speed / 10.0, 0.1, 1.0) / car.mass
+	var brake_decel = maxf(absf(target_accel) - coast, 0.0)
+	var brake_range = maxf(full_scale_brake_decel - coast, 0.01)
+	car.cmd_brake = clampf(brake_decel / brake_range, 0.0, 1.0)
+
+func _has_recent_actuation_cmd() -> bool:
+	if _last_actuation_cmd_time_sec < 0.0:
+		return false
+	var now_sec = Time.get_ticks_msec() * 0.001
+	return (now_sec - _last_actuation_cmd_time_sec) <= actuation_cmd_timeout_sec
+
+func _has_recent_control_cmd() -> bool:
+	if _last_control_cmd_time_sec < 0.0:
+		return false
+	var now_sec = Time.get_ticks_msec() * 0.001
+	return (now_sec - _last_control_cmd_time_sec) <= control_cmd_timeout_sec
+
+func _apply_actuation_command():
+	car.cmd_steering = clampf(
+		_auto_actuation_steer_cmd / maxf(car.max_steer_angle, 0.001), -1.0, 1.0)
+	var accel = _get_actuation_target_accel()
+	if car.current_gear == car.Gear.REVERSE:
+		accel = -accel
+	_apply_longitudinal_accel_target(accel, actuation_full_brake_decel)
+
+func _get_actuation_target_accel() -> float:
+	if _auto_actuation_brake_cmd > 0.0:
+		return -_auto_actuation_brake_cmd
+
+	var normalized = clampf(_auto_actuation_accel_cmd / maxf(actuation_accel_full_scale, 1.0), 0.0, 1.0)
+	return normalized * maxf(car.max_engine_force * car.drivetrain_efficiency * 2.0 / car.mass, 0.0)
+
+func _resolve_input_source_mode() -> int:
+	match preferred_input_source:
+		INPUT_SOURCE_CONTROL_CMD:
+			return INPUT_SOURCE_CONTROL_CMD if _has_recent_control_cmd() else INPUT_SOURCE_NONE
+		_:
+			return INPUT_SOURCE_ACTUATION_CMD if _has_recent_actuation_cmd() else INPUT_SOURCE_NONE
+	return INPUT_SOURCE_NONE
+
+func _profile_source_from_preference() -> int:
+	return INPUT_SOURCE_CONTROL_CMD if preferred_input_source == INPUT_SOURCE_CONTROL_CMD else INPUT_SOURCE_ACTUATION_CMD
+
+func refresh_active_response_profile():
+	_active_response_profile = INPUT_SOURCE_NONE
+	_apply_response_profile(_profile_source_from_preference())
+
+func _apply_response_profile(source: int):
+	if not car or not is_instance_valid(car):
+		return
+	if source == _active_response_profile:
+		return
+	match source:
+		INPUT_SOURCE_ACTUATION_CMD:
+			car.accel_response_delay = actuation_accel_response_delay
+			car.brake_response_delay = actuation_brake_response_delay
+			car.steering_response_delay = actuation_steering_response_delay
+			car.accel_time_constant = actuation_accel_time_constant
+			car.brake_time_constant = actuation_brake_time_constant
+			car.steering_time_constant = actuation_steering_time_constant
+		_:
+			car.accel_response_delay = control_accel_response_delay
+			car.brake_response_delay = control_brake_response_delay
+			car.steering_response_delay = control_steering_response_delay
+			car.accel_time_constant = control_accel_time_constant
+			car.brake_time_constant = control_brake_time_constant
+			car.steering_time_constant = control_steering_time_constant
+	car.apply_vehicle_params()
+	_active_response_profile = source
+
+func set_preferred_input_source(mode: int):
+	preferred_input_source = INPUT_SOURCE_CONTROL_CMD if mode == INPUT_SOURCE_CONTROL_CMD else INPUT_SOURCE_ACTUATION_CMD
+	refresh_active_response_profile()
+
+func get_preferred_input_source_key() -> String:
+	return _input_source_key(preferred_input_source)
+
+func get_preferred_input_source_label() -> String:
+	return _input_source_label(preferred_input_source)
+
+func get_active_input_source() -> int:
+	return _resolve_input_source_mode()
+
+func get_active_input_source_label() -> String:
+	return _input_source_label(_resolve_input_source_mode())
+
+func get_input_source_status() -> String:
+	match _resolve_input_source_mode():
+		INPUT_SOURCE_CONTROL_CMD:
+			return "control_cmd active"
+		INPUT_SOURCE_ACTUATION_CMD:
+			return "actuation_cmd active"
+		_:
+			return "waiting control_cmd" if preferred_input_source == INPUT_SOURCE_CONTROL_CMD else "waiting actuation_cmd"
+
+func _input_source_key(mode: int) -> String:
+	match mode:
+		INPUT_SOURCE_CONTROL_CMD:
+			return "control_cmd"
+		INPUT_SOURCE_ACTUATION_CMD:
+			return "actuation_cmd"
+		_:
+			return "actuation_cmd"
+
+func _input_source_label(mode: int) -> String:
+	match mode:
+		INPUT_SOURCE_CONTROL_CMD:
+			return "CONTROL"
+		INPUT_SOURCE_ACTUATION_CMD:
+			return "ACTUATION"
+		INPUT_SOURCE_NONE:
+			return "NONE"
+		_:
+			return "ACTUATION"
+
+func _load_param_section(section, props: Array[String]) -> int:
+	if not (section is Dictionary):
+		return 0
+	var count := 0
+	for prop in props:
+		if not section.has(prop):
+			continue
+		if prop == "preferred_input_source":
+			set_preferred_input_source(_parse_input_source(section[prop]))
+		else:
+			_assign_loaded_value(prop, section[prop])
+		count += 1
+	return count
+
+func _load_legacy_params(root: Dictionary) -> int:
+	var count := 0
+	var control_section = root.get("control_cmd", {})
+	var actuation_section = root.get("actuation_cmd", {})
+	var input_section = root.get("input_source", {})
+	var sensor_section = root.get("sensor_delay", {})
+	count += _load_legacy_value(root, control_section, "accel_response_delay", "control_accel_response_delay")
+	count += _load_legacy_value(root, control_section, "brake_response_delay", "control_brake_response_delay")
+	count += _load_legacy_value(root, control_section, "steering_response_delay", "control_steering_response_delay")
+	count += _load_legacy_value(root, control_section, "accel_time_constant", "control_accel_time_constant")
+	count += _load_legacy_value(root, control_section, "brake_time_constant", "control_brake_time_constant")
+	count += _load_legacy_value(root, control_section, "steering_time_constant", "control_steering_time_constant")
+	count += _load_legacy_value(root, control_section, "full_brake_decel", "control_full_brake_decel")
+	count += _load_legacy_value(root, control_section, "control_cmd_timeout_sec", "control_cmd_timeout_sec")
+	count += _load_legacy_value(root, actuation_section, "accel_response_delay", "actuation_accel_response_delay")
+	count += _load_legacy_value(root, actuation_section, "brake_response_delay", "actuation_brake_response_delay")
+	count += _load_legacy_value(root, actuation_section, "steering_response_delay", "actuation_steering_response_delay")
+	count += _load_legacy_value(root, actuation_section, "accel_time_constant", "actuation_accel_time_constant")
+	count += _load_legacy_value(root, actuation_section, "brake_time_constant", "actuation_brake_time_constant")
+	count += _load_legacy_value(root, actuation_section, "steering_time_constant", "actuation_steering_time_constant")
+	count += _load_legacy_value(root, actuation_section, "full_brake_decel", "actuation_full_brake_decel")
+	count += _load_legacy_value(root, actuation_section, "actuation_accel_full_scale", "actuation_accel_full_scale")
+	count += _load_legacy_value(root, actuation_section, "actuation_cmd_timeout_sec", "actuation_cmd_timeout_sec")
+	count += _load_legacy_value(root, input_section, "preferred_input_source", "preferred_input_source")
+	for prop in SENSOR_DELAY_PARAM_PROPS:
+		count += _load_legacy_value(root, sensor_section, prop, prop)
+	return count
+
+func _load_legacy_value(root: Dictionary, section, legacy_key: String, prop: String) -> int:
+	if not root.has(legacy_key):
+		return 0
+	if (section is Dictionary) and section.has(prop):
+		return 0
+	if prop == "preferred_input_source":
+		set_preferred_input_source(_parse_input_source(root[legacy_key]))
+	else:
+		_assign_loaded_value(prop, root[legacy_key])
+	return 1
+
+func _assign_loaded_value(prop: String, value):
+	var current = get(prop)
+	match typeof(current):
+		TYPE_INT:
+			set(prop, int(value))
+		TYPE_BOOL:
+			set(prop, bool(value))
+		TYPE_STRING:
+			set(prop, str(value))
+		_:
+			set(prop, float(value))
+
+func _parse_input_source(value) -> int:
+	if typeof(value) == TYPE_STRING:
+		match str(value).to_lower():
+			"control", "control_cmd":
+				return INPUT_SOURCE_CONTROL_CMD
+			"actuation", "actuation_cmd":
+				return INPUT_SOURCE_ACTUATION_CMD
+			_:
+				return INPUT_SOURCE_ACTUATION_CMD
+	return INPUT_SOURCE_CONTROL_CMD if int(value) == INPUT_SOURCE_CONTROL_CMD else INPUT_SOURCE_ACTUATION_CMD
+
+func _apply_signal_commands():
 	# Turn indicators: 1=DISABLE, 2=LEFT, 3=RIGHT
 	match current_turn_indicator:
 		2:
@@ -211,8 +501,6 @@ func _apply_autoware_control():
 	car.hazard_lights = (current_hazard_lights == 2)
 	if car.hazard_lights:
 		car.current_turn_signal = car.TurnSignal.OFF
-
-	car.input_enabled = false
 
 # ============================================================
 # Topic setup
@@ -234,15 +522,20 @@ func _setup_topics():
 
 	# Subscribe to input topics
 	_subscribe("/control/command/control_cmd", "autoware_control_msgs/msg/Control")
+	_subscribe("/control/command/actuation_cmd",
+		"tier4_vehicle_msgs/msg/ActuationCommandStamped")
 	_subscribe("/control/command/gear_cmd", "autoware_vehicle_msgs/msg/GearCommand")
 	_subscribe("/control/command/turn_indicators_cmd", "autoware_vehicle_msgs/msg/TurnIndicatorsCommand")
 	_subscribe("/control/command/hazard_lights_cmd", "autoware_vehicle_msgs/msg/HazardLightsCommand")
 	_subscribe("/initialpose3d", "geometry_msgs/msg/PoseWithCovarianceStamped")
 	_subscribe("/vehicle/engage", "autoware_vehicle_msgs/msg/Engage")
+	_subscribe("/tf", "tf2_msgs/msg/TFMessage")
 	_subscribe("/tf_static", "tf2_msgs/msg/TFMessage")
 	_subscribe("/perception/traffic_light_recognition/traffic_signals",
 		"autoware_perception_msgs/msg/TrafficLightGroupArray")
 	_subscribe("/planning/trajectory",
+		"autoware_planning_msgs/msg/Trajectory")
+	_subscribe("/planning/scenario_planning/trajectory",
 		"autoware_planning_msgs/msg/Trajectory")
 	_subscribe("/perception/object_recognition/objects",
 		"autoware_perception_msgs/msg/PredictedObjects")
@@ -297,6 +590,14 @@ func _handle_topic_msg(topic: String, msg: Dictionary):
 			_auto_steer_cmd = lat.get("steering_tire_angle", 0.0)
 			_auto_accel_cmd = lon.get("acceleration", 0.0)
 			_auto_velocity_cmd = lon.get("velocity", 0.0)
+			_last_control_cmd_time_sec = Time.get_ticks_msec() * 0.001
+
+		"/control/command/actuation_cmd":
+			var act = msg.get("actuation", {})
+			_auto_actuation_accel_cmd = float(act.get("accel_cmd", 0.0))
+			_auto_actuation_brake_cmd = float(act.get("brake_cmd", 0.0))
+			_auto_actuation_steer_cmd = float(act.get("steer_cmd", 0.0))
+			_last_actuation_cmd_time_sec = Time.get_ticks_msec() * 0.001
 
 		"/control/command/gear_cmd":
 			_auto_gear_cmd = int(msg.get("command", AW_GEAR_DRIVE))
@@ -318,13 +619,13 @@ func _handle_topic_msg(topic: String, msg: Dictionary):
 		"/initialpose3d":
 			_handle_initial_pose(msg)
 
-		"/tf_static":
+		"/tf", "/tf_static":
 			_handle_incoming_tf(msg)
 
 		"/perception/traffic_light_recognition/traffic_signals":
 			_handle_traffic_light_recognition(msg)
 
-		"/planning/trajectory":
+		"/planning/trajectory", "/planning/scenario_planning/trajectory":
 			_handle_trajectory(msg)
 
 		"/perception/object_recognition/objects":
