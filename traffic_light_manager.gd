@@ -61,15 +61,14 @@ func _load_textures():
 	}
 	for key in tex_map:
 		var path = base_path + tex_map[key]
-		var global_path = ProjectSettings.globalize_path(path)
-		if FileAccess.file_exists(global_path):
-			var img = Image.load_from_file(global_path)
-			if img:
-				_textures[key] = ImageTexture.create_from_image(img)
+		if ResourceLoader.exists(path):
+			var texture = load(path)
+			if texture is Texture2D:
+				_textures[key] = texture
 			else:
-				push_warning("[TrafficLightManager] Failed to load image: %s" % path)
+				push_warning("[TrafficLightManager] Failed to load texture resource: %s" % path)
 		else:
-			push_warning("[TrafficLightManager] Texture not found: %s" % global_path)
+			push_warning("[TrafficLightManager] Texture not found: %s" % path)
 
 func _process(_delta):
 	_auto_turn_off_stale()
@@ -395,4 +394,3 @@ func _basis_from_normal(n: Vector3) -> Basis:
 	if abs(normal.dot(up)) > 0.98:
 		up = Vector3.RIGHT
 	return Basis.looking_at(normal, up)
-
