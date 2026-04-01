@@ -1,5 +1,5 @@
 {
-  "latest_version": "0.6.1",
-  "release_url": "https://github.com/yukkysaito/godot_based_autoware_planning_simulator/releases/tag/v0.6.1",
-  "download_url_linux": "https://github.com/yukkysaito/godot_based_autoware_planning_simulator/releases/download/v0.6.1/godot_autoware_simulator-v0.6.1.tar.gz"
+  "latest_version": "0.6.2",
+  "release_url": "https://github.com/yukkysaito/godot_based_autoware_planning_simulator/releases/tag/v0.6.2",
+  "download_url_linux": "https://github.com/yukkysaito/godot_based_autoware_planning_simulator/releases/download/v0.6.2/godot_autoware_simulator-v0.6.2.tar.gz"
 }

@@ -9,6 +9,7 @@ var _label: Label
 var _download_btn: Button
 var _dismiss_btn: Button
 var _button_row: HBoxContainer
+var _root: VBoxContainer
 var _http: HTTPRequest
 var _timer: Timer
 var _current_version := ""
@@ -42,41 +43,46 @@ func _ready():
 
 func _build_ui():
 	var style = StyleBoxFlat.new()
-	style.bg_color = Color(0.08, 0.09, 0.12, 0.94)
-	style.corner_radius_top_left = 10
-	style.corner_radius_top_right = 10
-	style.corner_radius_bottom_left = 10
-	style.corner_radius_bottom_right = 10
-	style.content_margin_left = 14
-	style.content_margin_right = 14
-	style.content_margin_top = 12
-	style.content_margin_bottom = 12
+	style.bg_color = Color(0.07, 0.08, 0.11, 0.92)
+	style.border_color = Color(0.42, 0.47, 0.58, 0.32)
+	style.border_width_left = 1
+	style.border_width_top = 1
+	style.border_width_right = 1
+	style.border_width_bottom = 1
+	style.corner_radius_top_left = 12
+	style.corner_radius_top_right = 12
+	style.corner_radius_bottom_left = 12
+	style.corner_radius_bottom_right = 12
+	style.shadow_color = Color(0, 0, 0, 0.25)
+	style.shadow_size = 6
+	style.content_margin_left = 12
+	style.content_margin_right = 12
+	style.content_margin_top = 9
+	style.content_margin_bottom = 9
 	add_theme_stylebox_override("panel", style)
 
-	var root = VBoxContainer.new()
-	root.add_theme_constant_override("separation", 8)
-	add_child(root)
+	_root = VBoxContainer.new()
+	_root.add_theme_constant_override("separation", 8)
+	add_child(_root)
 
 	_label = Label.new()
-	_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_label.custom_minimum_size = Vector2(300, 0)
-	_label.add_theme_font_size_override("font_size", 13)
-	_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
-	root.add_child(_label)
+	_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_label.add_theme_font_size_override("font_size", 12)
+	_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
+	_root.add_child(_label)
 
 	_button_row = HBoxContainer.new()
 	_button_row.add_theme_constant_override("separation", 8)
-	root.add_child(_button_row)
+	_root.add_child(_button_row)
 
 	_download_btn = Button.new()
 	_download_btn.text = "Download"
-	_download_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_download_btn.pressed.connect(_open_download)
 	_button_row.add_child(_download_btn)
 
 	_dismiss_btn = Button.new()
 	_dismiss_btn.text = "Dismiss"
-	_dismiss_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_dismiss_btn.pressed.connect(_dismiss_update)
 	_button_row.add_child(_dismiss_btn)
 
@@ -166,13 +172,19 @@ func _dismiss_update():
 	_set_version_only_state()
 
 func _set_version_only_state():
-	_label.text = "Version %s" % _current_version
+	_label.text = "v%s" % _current_version
+	_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_label.custom_minimum_size = Vector2.ZERO
+	_root.add_theme_constant_override("separation", 0)
 	_download_btn.disabled = true
 	_button_row.visible = false
 	visible = true
 
 func _set_update_available_state(latest: String):
-	_label.text = "New version available: %s\nCurrent version: %s" % [latest, _current_version]
+	_label.text = "New version: %s\nCurrent: %s" % [latest, _current_version]
+	_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_label.custom_minimum_size = Vector2(220, 0)
+	_root.add_theme_constant_override("separation", 8)
 	_download_btn.disabled = _download_url.is_empty() and _release_url.is_empty()
 	_button_row.visible = true
 	visible = true

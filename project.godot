@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Godot Based Autoware Planning Simulator"
-config/version="0.6.1"
+config/version="0.6.2"
 config/update_check_url="https://raw.githubusercontent.com/yukkysaito/godot_based_autoware_planning_simulator/main/version.json"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.4")
