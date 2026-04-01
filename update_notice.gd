@@ -7,14 +7,11 @@ const CHECK_INTERVAL_SEC := 60.0
 
 var _label: Label
 var _download_btn: Button
-var _dismiss_btn: Button
-var _button_row: HBoxContainer
-var _root: VBoxContainer
+var _row: HBoxContainer
 var _http: HTTPRequest
 var _timer: Timer
 var _current_version := ""
 var _latest_available_version := ""
-var _dismissed_version := ""
 var _release_url := ""
 var _download_url := ""
 var _request_in_flight := false
@@ -42,6 +39,7 @@ func _ready():
 		_check_for_update()
 
 func _build_ui():
+	custom_minimum_size = Vector2(150, 0)
 	var style = StyleBoxFlat.new()
 	style.bg_color = Color(0.07, 0.08, 0.11, 0.92)
 	style.border_color = Color(0.42, 0.47, 0.58, 0.32)
@@ -57,34 +55,28 @@ func _build_ui():
 	style.shadow_size = 6
 	style.content_margin_left = 12
 	style.content_margin_right = 12
-	style.content_margin_top = 9
-	style.content_margin_bottom = 9
+	style.content_margin_top = 8
+	style.content_margin_bottom = 8
 	add_theme_stylebox_override("panel", style)
 
-	_root = VBoxContainer.new()
-	_root.add_theme_constant_override("separation", 8)
-	add_child(_root)
+	_row = HBoxContainer.new()
+	_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_row.add_theme_constant_override("separation", 8)
+	add_child(_row)
 
 	_label = Label.new()
 	_label.autowrap_mode = TextServer.AUTOWRAP_OFF
-	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_label.add_theme_font_size_override("font_size", 12)
 	_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
-	_root.add_child(_label)
-
-	_button_row = HBoxContainer.new()
-	_button_row.add_theme_constant_override("separation", 8)
-	_root.add_child(_button_row)
+	_row.add_child(_label)
 
 	_download_btn = Button.new()
-	_download_btn.text = "Download"
+	_download_btn.text = "Update"
+	_download_btn.custom_minimum_size = Vector2(58, 0)
 	_download_btn.pressed.connect(_open_download)
-	_button_row.add_child(_download_btn)
-
-	_dismiss_btn = Button.new()
-	_dismiss_btn.text = "Dismiss"
-	_dismiss_btn.pressed.connect(_dismiss_update)
-	_button_row.add_child(_dismiss_btn)
+	_row.add_child(_download_btn)
 
 func _should_check() -> bool:
 	if OS.has_feature("dedicated_server"):
@@ -146,9 +138,6 @@ func _apply_release_info(data: Dictionary):
 	if not _is_newer_version(latest, _current_version):
 		_set_version_only_state()
 		return
-	if latest == _dismissed_version:
-		_set_version_only_state()
-		return
 	_set_update_available_state(latest)
 
 func _pick_download_url(data: Dictionary, fallback_url: String) -> String:
@@ -167,26 +156,21 @@ func _open_download():
 	if not url.is_empty():
 		OS.shell_open(url)
 
-func _dismiss_update():
-	_dismissed_version = _latest_available_version
-	_set_version_only_state()
-
 func _set_version_only_state():
 	_label.text = "v%s" % _current_version
 	_label.autowrap_mode = TextServer.AUTOWRAP_OFF
-	_label.custom_minimum_size = Vector2.ZERO
-	_root.add_theme_constant_override("separation", 0)
+	tooltip_text = "Current version: v%s" % _current_version
 	_download_btn.disabled = true
-	_button_row.visible = false
+	_download_btn.visible = false
 	visible = true
 
 func _set_update_available_state(latest: String):
-	_label.text = "New version: %s\nCurrent: %s" % [latest, _current_version]
-	_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_label.custom_minimum_size = Vector2(220, 0)
-	_root.add_theme_constant_override("separation", 8)
+	_label.text = "v%s" % _current_version
+	_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	tooltip_text = "New version available: v%s" % latest
+	_download_btn.tooltip_text = "Download v%s" % latest
 	_download_btn.disabled = _download_url.is_empty() and _release_url.is_empty()
-	_button_row.visible = true
+	_download_btn.visible = true
 	visible = true
 
 func _is_newer_version(remote: String, local: String) -> bool:
