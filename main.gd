@@ -242,6 +242,7 @@ var _dash_panel: PanelContainer
 var _map_progress_bar: ProgressBar
 var _map_progress_label: Label
 var _map_progress_panel: PanelContainer
+var _update_notice: PanelContainer
 
 func _setup_hud():
 	var hud = CanvasLayer.new()
@@ -369,6 +370,12 @@ func _setup_hud():
 	bar_fill.corner_radius_bottom_left = 4; bar_fill.corner_radius_bottom_right = 4
 	_map_progress_bar.add_theme_stylebox_override("fill", bar_fill)
 	prog_vbox.add_child(_map_progress_bar)
+
+	# --- Update notice (top-right) ---
+	_update_notice = PanelContainer.new()
+	_update_notice.set_script(load("res://update_notice.gd"))
+	hud.add_child(_update_notice)
+	_update_notice.resized.connect(_update_telemetry_position)
 
 	# Keep old reference for compatibility
 	speed_label = _dash_speed
@@ -523,6 +530,9 @@ func _update_telemetry_position():
 		telemetry.position.y - control_telemetry.size.y - 5)
 	# Center dashboard panel at top
 	_dash_panel.position = Vector2((vp.x - _dash_panel.size.x) / 2, 16)
+	# Top-right update notice
+	if _update_notice:
+		_update_notice.position = Vector2(vp.x - _update_notice.size.x - 16, 16)
 	# Bottom-left hotkey bar
 	info_label.position = Vector2(20, vp.y - 30)
 	# Center-top notification

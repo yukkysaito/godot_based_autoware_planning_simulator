@@ -126,6 +126,11 @@ Or open the project in the Godot editor and press F5.
 Use RViz2's "2D Pose Estimate" tool to place the vehicle on the map.
 Until an initial pose is set, the vehicle starts on a default 1km x 1km ground plane at the origin.
 
+## Additional Docs
+
+- [Release Procedure](docs/release.md)
+- [Web Build](docs/web_build.md)
+
 ## Fit Vehicle Params From A Recorded MCAP
 
 Use [`scripts/fit_vehicle_params.py`](scripts/fit_vehicle_params.py) to estimate a first-pass parameter update from a recorded bag.
